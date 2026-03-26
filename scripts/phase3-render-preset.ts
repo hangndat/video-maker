@@ -1,7 +1,7 @@
 /**
  * Phase 3 — preset mặc định ~15s (fixtures/phase3-preset-scenes.json), không OpenAI.
  * Bản dài: PHASE3_FIXTURE=fixtures/phase3-preset-scenes-long.json
- * PIPELINE_LOG=1 — log các bước (hook Comfy vs emotion/FFmpeg từng cảnh).
+ * PIPELINE_LOG=1 — log các bước FFmpeg / TTS.
  *
  * PHASE3_JOB_ID   — mặc định phase3-preset-<timestamp>
  * PHASE3_FIXTURE  — mặc định fixtures/phase3-preset-scenes.json
@@ -36,7 +36,7 @@ async function main(): Promise<void> {
   const { scenes } = fixtureSchema.parse(raw);
 
   console.log(
-    `phase3-render-preset jobId=${jobId} scenes=${scenes.length} fixture=${path.relative(repoRoot, fixturePath)} SKIP_COMFY=${process.env.SKIP_COMFY ?? '(unset)'}`,
+    `phase3-render-preset jobId=${jobId} scenes=${scenes.length} fixture=${path.relative(repoRoot, fixturePath)}`,
   );
 
   const { finalVideoPath, meta } = await runContentPipeline({

@@ -2,17 +2,22 @@
 
 | Tài liệu | Mục đích |
 |----------|----------|
-| [README.md](../README.md) ở gốc repo | Cài đặt, biến môi trường, API (`/jobs/render`, `/jobs/render/from-video`), Docker, workflow Comfy (tóm tắt) |
-| [**pipeline.md**](pipeline.md) | Luồng chi tiết: Comfy **mỗi cảnh** (`raw-scene-*`), `emotion` → driving / FFmpeg, artifact, `from-video`, `verify:driving`, liên kết mã |
-| [**dev-phases.md**](dev-phases.md) | Phase dev ($0 → trả phí): Definition of done + bảng test T0–T4, cổng chuyển phase |
-| [comfy-macos.md](comfy-macos.md) | ComfyUI native macOS, LivePortrait KJ, VHS, model, symlink / `COMFY_INPUT_DIR` / `COMFY_OUTPUT_DIR`, lỗi thường gặp |
-| [docker-compose.langfuse.yml](../docker-compose.langfuse.yml) | Langfuse self-host; kết hợp với `LANGFUSE_*` trong `.env` app (`npm run langfuse:env`) |
-| [.env.example](../.env.example) | Mẫu `.env` có comment (gồm Langfuse, log file, Comfy retry/timeout) |
-| [.env.langfuse.example](../.env.langfuse.example) | Mẫu biến cho compose Langfuse (thực tế nên dùng `npm run langfuse:env` để sinh secrets) |
+| [README.md](../README.md) | Cài đặt, `DATA_ROOT`, bảng API (`GET /health`, `POST /jobs/...`), Docker, script npm, E2E |
+| [**pipeline.md**](pipeline.md) | Bảng bước render, preset & merge (§2.1), `motion`, `segmentVideoMode`, SFX, `from-video`, file nguồn trong `src/`, §8 E2E |
+| [docker-compose.langfuse.yml](../docker-compose.langfuse.yml) | Langfuse self-host; kết hợp `LANGFUSE_*` trong `.env` app (`npm run langfuse:env`) |
+| [.env.example](../.env.example) | Ứng dụng: preset, OpenAI, ElevenLabs, ASS/BGM, E2E, Langfuse tuỳ chọn |
+| [.env.langfuse.example](../.env.langfuse.example) | Compose Langfuse — nên dùng `npm run langfuse:env` để sinh secrets |
 
-**Luồng đọc gợi ý**
+**Schema & code tham chiếu**
 
-1. README gốc — nắm cài đặt và API.
-2. **[pipeline.md](pipeline.md)** — driving, artifact job, alignment, reuse.
-3. **[dev-phases.md](dev-phases.md)** — checklist đa cảnh ~60s, DoD + test T0–T4 ($0 trước).
-4. Nếu bật Comfy (`SKIP_COMFY=0`): **comfy-macos.md** → `npm run check:comfy` → tuỳ chọn `npm run verify:driving`.
+| Chủ đề | File |
+|--------|------|
+| Preset file + `tuning` (Zod) | [`src/types/render-preset-schema.ts`](../src/types/render-preset-schema.ts) |
+| Scene / motion / `videoMode` | [`src/types/script-schema.ts`](../src/types/script-schema.ts) |
+| Job meta | [`src/types/job-meta.ts`](../src/types/job-meta.ts) |
+
+**Gợi ý đọc**
+
+1. [README.md](../README.md) — chạy nhanh và gọi API.
+2. [pipeline.md](pipeline.md) — chỉnh kênh qua JSON preset và reuse job.
+3. Compose Langfuse — khi cần trace: `docker-compose.langfuse.yml` + `.env.langfuse`.

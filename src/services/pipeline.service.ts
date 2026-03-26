@@ -11,30 +11,40 @@ import {
   type JobPaths,
   type PathProvider,
 } from '../shared/path-provider.js';
-import { mergeEnvironmentContext } from '../shared/merge-environment.js';
-import { ffprobeDurationSec } from '../shared/ffprobe.js';
-import { comfyNodeIpAdapterImageId } from '../config/comfy-workflow.js';
 import type { JobMeta } from '../types/job-meta.js';
 import type { CharacterAlignment } from '../types/elevenlabs.js';
 import { sceneAlignmentArtifactSchema } from '../types/scene-alignment-artifact.js';
 import type { ScriptScene } from '../types/script-schema.js';
-import { scriptScenesFullText } from '../types/script-schema.js';
+import {
+  scriptScenesFullText,
+  stripMarkdownBoldForTts,
+} from '../types/script-schema.js';
 import { scriptService } from './script.service.js';
 import { voiceService } from './voice.service.js';
-import { comfyService } from './comfy.service.js';
+import {
+  resolveRenderConfig,
+  defaultProfileId,
+  type EffectiveRenderConfig,
+} from './render-config.js';
 import { getLogContext } from '../shared/log-context.js';
 import { logger } from '../shared/logger.js';
 import { pipelineLog } from '../shared/pipeline-log.js';
 import {
   assembleFinalVideoPremuxed,
   concatSceneClips,
-  createSceneClip,
-  extractLastFramePng,
+  createBrollSceneClip,
   generateColorBarsVideo,
+  generateSineMp3,
   mergeSceneAlignments,
-  sceneEmotionToFfmpegMotionLabel,
+  sceneMotionToLabel,
   type SceneAlignmentChunk,
+  type SfxTimelineEntry,
 } from './video.service.js';
+import { ffprobeDurationSec } from '../shared/ffprobe.js';
+import {
+  notifyJobFinished,
+  notifyJobStarted,
+} from '../shared/jobs-manifest.js';
 
 function jobLifecycle(msg: string, fields: Record<string, unknown>): void {
   logger.info({ component: 'job', ...getLogContext(), ...fields }, msg);
@@ -42,21 +52,23 @@ function jobLifecycle(msg: string, fields: Record<string, unknown>): void {
 
 export type RunJobInput = {
   jobId: string;
-  /** Gọi OpenAI sinh kịch bản khi không có `scenes`. */
   idea?: string;
-  /** Kịch bản gửi sẵn: bỏ OpenAI, vẫn chạy ElevenLabs + Comfy + FFmpeg. */
   scenes?: ScriptScene[];
   bgmPath?: string;
-  characterProfile?: JobMeta['characterProfile'];
-  environment?: JobMeta['environment'];
-  visual?: JobMeta['visual'];
+  profileId?: string;
+  tuning?: Record<string, unknown>;
+  /** Đọc `meta.json` đã có `script.scenes`, bỏ script/OpenAI, chạy lại từ ElevenLabs. */
+  resumeFrom?: 'tts';
 };
 
 export type RunVideoPhaseInput = {
   jobId: string;
   bgmPath?: string;
-  /** Skip Comfy and use existing `comfy/raw.mp4` */
+  /** Reuse existing media/scenes/source-*.mp4 (skip copy ingest) */
   reuseRawVideo?: boolean;
+  assembleOnly?: boolean;
+  profileId?: string;
+  tuning?: Record<string, unknown>;
 };
 
 export type RunJobResult = {
@@ -76,24 +88,22 @@ async function writeMeta(
   );
 }
 
-/** Snapshot audit: character khóa + environment merge theo từng cảnh. */
 async function writeDeclarativeSnapshot(
   paths: JobPaths,
   meta: JobMeta,
+  effective: EffectiveRenderConfig,
 ): Promise<void> {
   const sorted = [...meta.script.scenes].sort((a, b) => a.id - b.id);
   const payload = {
-    schema_version: 1,
+    schema_version: 2,
     generated_at: new Date().toISOString(),
     jobId: meta.jobId,
-    characterProfile: meta.characterProfile ?? null,
-    environment_defaults: meta.environment ?? null,
+    profileId: meta.profileId ?? effective.profileId,
+    effectiveRenderConfig: effective,
     scenes: sorted.map((s) => ({
       id: s.id,
-      environment_merged: mergeEnvironmentContext(
-        meta.environment as Record<string, unknown> | undefined,
-        s.environment,
-      ),
+      motion: s.motion,
+      videoPath: s.videoPath ?? null,
     })),
   };
   await fs.promises.mkdir(paths.declarativeDir, { recursive: true });
@@ -104,48 +114,52 @@ async function writeDeclarativeSnapshot(
   );
 }
 
-function chainComfyFramesEnabled(meta: JobMeta): boolean {
-  return (
-    meta.visual?.chainComfyFrames === true ||
-    process.env.COMFY_CHAIN_FRAMES === '1'
-  );
-}
-
 function resolveDataPath(dataRoot: string, relOrAbs: string): string {
   return path.isAbsolute(relOrAbs) ? relOrAbs : path.join(dataRoot, relOrAbs);
 }
 
-/** Ảnh copy vào node IP-Adapter khi `COMFY_NODE_IP_ADAPTER_IMAGE` đã cấu hình. */
-function resolveIpAdapterReferencePathForRender(
-  provider: PathProvider,
-  meta: JobMeta,
-  masterFacePath: string,
-): string | undefined {
-  if (!comfyNodeIpAdapterImageId()) return undefined;
-  const fromMeta = meta.visual?.ipAdapterReferencePath?.trim();
-  const fromEnv = process.env.COMFY_IP_ADAPTER_REFERENCE_PATH?.trim();
-  const raw = fromMeta || fromEnv;
-  if (raw) {
-    const p = resolveDataPath(provider.dataRoot, raw);
-    return fs.existsSync(p) ? p : undefined;
+async function ensureAssetMp4(
+  absPath: string,
+  placeholder: boolean,
+): Promise<void> {
+  if (fs.existsSync(absPath)) return;
+  await fs.promises.mkdir(path.dirname(absPath), { recursive: true });
+  if (placeholder) {
+    await generateColorBarsVideo(absPath, 1080, 1920, 12);
+    pipelineLog('assets.placeholder_video', { path: absPath });
   }
-  return fs.existsSync(masterFacePath) ? masterFacePath : undefined;
 }
 
-function resolveBgm(
+async function ensureSfxPlaceholders(
+  dataRoot: string,
+  sfxMap: Record<string, string>,
+): Promise<void> {
+  for (const rel of Object.values(sfxMap)) {
+    const p = resolveDataPath(dataRoot, rel);
+    if (fs.existsSync(p)) continue;
+    await fs.promises.mkdir(path.dirname(p), { recursive: true });
+    await generateSineMp3(p, 0.25, 880);
+    pipelineLog('assets.placeholder_sfx', { path: p });
+  }
+}
+
+function resolveBgmPath(
   provider: PathProvider,
-  bgmPath?: string,
+  effective: EffectiveRenderConfig,
+  bgmPathArg?: string,
 ): string | undefined {
-  let bgm: string | undefined;
-  if (bgmPath) {
-    bgm = path.isAbsolute(bgmPath)
-      ? bgmPath
-      : path.join(provider.dataRoot, bgmPath);
+  let rel: string | undefined;
+  if (bgmPathArg?.trim()) rel = bgmPathArg.trim();
+  else if (effective.audio.bgmRelativePath?.trim()) {
+    rel = effective.audio.bgmRelativePath.trim();
   } else if (process.env.BGM_PATH?.trim()) {
     const v = process.env.BGM_PATH.trim();
-    bgm = path.isAbsolute(v) ? v : path.join(provider.dataRoot, v);
+    rel = path.isAbsolute(v) ? undefined : v;
+    if (path.isAbsolute(v) && fs.existsSync(v)) return v;
   }
-  return bgm && fs.existsSync(bgm) ? bgm : undefined;
+  if (!rel) return undefined;
+  const full = resolveDataPath(provider.dataRoot, rel);
+  return fs.existsSync(full) ? full : undefined;
 }
 
 async function writeSceneAlignmentArtifact(
@@ -197,207 +211,201 @@ async function loadSceneAlignmentChunksFromDisk(
   return chunks;
 }
 
-/** Comfy / placeholder: một lần render cho mỗi cảnh — driving theo `scene.emotion`. */
-async function runComfyPerScenes(args: {
+async function ingestBrollSources(args: {
   paths: JobPaths;
   provider: PathProvider;
-  meta: JobMeta;
-  jobId: string;
-  reuseRawVideo: boolean;
   sortedScenes: ScriptScene[];
+  effective: EffectiveRenderConfig;
+  reuseRawVideo: boolean;
+  meta: JobMeta;
 }): Promise<void> {
-  const { paths, provider, meta, jobId, reuseRawVideo, sortedScenes } = args;
+  const { paths, provider, sortedScenes, effective, reuseRawVideo, meta } =
+    args;
+  const ph =
+    effective.video.placeholderRelativePath?.trim() ||
+    'assets/broll/placeholder.mp4';
+  const placeholderAbs = resolveDataPath(provider.dataRoot, ph);
+  await ensureAssetMp4(placeholderAbs, true);
+  await ensureSfxPlaceholders(provider.dataRoot, effective.audio.sfx);
 
   if (reuseRawVideo) {
-    const perSceneOk = sortedScenes.every((s) =>
-      fs.existsSync(paths.comfySceneRawVideo(s.id)),
+    const ok = sortedScenes.every((s) =>
+      fs.existsSync(paths.mediaSceneSource(s.id)),
     );
-    if (!perSceneOk && !fs.existsSync(paths.comfyRawVideo)) {
+    if (!ok) {
       throw new Error(
-        `reuseRawVideo: thiếu comfy/scenes/raw-scene-*.mp4 hoặc comfy/raw.mp4 (${paths.jobRoot})`,
+        `reuseRawVideo: missing media/scenes/source-*.mp4 under ${paths.jobRoot}`,
       );
     }
-    pipelineLog('comfy.skip', {
-      reason: 'reuseRawVideo',
-      jobId,
-      perSceneFiles: perSceneOk,
-      legacySingleRaw: !perSceneOk,
-    });
-    if (perSceneOk) {
-      meta.comfy = {
-        sceneRawById: Object.fromEntries(
-          sortedScenes.map((s) => [
-            String(s.id),
-            paths.comfySceneRawVideo(s.id),
-          ]),
-        ),
-        rawVideoPath: fs.existsSync(paths.comfyRawVideo)
-          ? paths.comfyRawVideo
-          : paths.comfySceneRawVideo(sortedScenes[0]!.id),
-      };
-    } else {
-      meta.comfy = { rawVideoPath: paths.comfyRawVideo };
-    }
+    pipelineLog('media.skip_ingest', { reason: 'reuseRawVideo' });
+    meta.media = {
+      sceneSourceById: Object.fromEntries(
+        sortedScenes.map((s) => [String(s.id), paths.mediaSceneSource(s.id)]),
+      ),
+    };
     return;
   }
 
-  const masterFaceDefault = provider.masterFace();
-  await fs.promises.mkdir(paths.scenesDir, { recursive: true });
-
-  if (process.env.SKIP_COMFY === '1') {
-    pipelineLog('comfy.placeholder', {
-      jobId,
-      mode: 'per_scene',
-      sceneCount: sortedScenes.length,
-    });
-    const sceneRawById: Record<string, string> = {};
-    for (const scene of sortedScenes) {
-      const out = paths.comfySceneRawVideo(scene.id);
-      let dur = 30;
-      try {
-        dur =
-          Math.ceil(await ffprobeDurationSec(paths.sceneVoiceMp3(scene.id))) +
-          5;
-      } catch {
-        /* keep default */
-      }
-      await generateColorBarsVideo(out, 1080, 1920, Math.max(10, dur));
-      sceneRawById[String(scene.id)] = out;
+  const sceneSourceById: Record<string, string> = {};
+  for (const scene of sortedScenes) {
+    const rel = scene.videoPath?.trim() || ph;
+    const src = resolveDataPath(provider.dataRoot, rel);
+    if (!fs.existsSync(src)) {
+      throw new Error(`B-roll not found for scene ${scene.id}: ${src}`);
     }
-    meta.comfy = { sceneRawById, rawVideoPath: paths.comfyRawVideo };
-    if (sortedScenes[0]) {
-      await fs.promises.copyFile(
-        paths.comfySceneRawVideo(sortedScenes[0].id),
-        paths.comfyRawVideo,
-      );
-    }
-    return;
-  }
-
-  if (!fs.existsSync(masterFaceDefault)) {
-    throw new Error(
-      `Master face missing: ${masterFaceDefault} (place Master_Face.png under assets)`,
-    );
-  }
-
-  const chainOn = chainComfyFramesEnabled(meta);
-  let masterFacePath = masterFaceDefault;
-  const sceneRawById: Record<string, string> = {};
-  for (let i = 0; i < sortedScenes.length; i++) {
-    const scene = sortedScenes[i]!;
-    if (!chainOn) {
-      masterFacePath = masterFaceDefault;
-    }
-    const out = paths.comfySceneRawVideo(scene.id);
-    const subJobId = `${jobId}-s${scene.id}`;
-    const ipRef = resolveIpAdapterReferencePathForRender(
-      provider,
-      meta,
-      masterFacePath,
-    );
-    pipelineLog('comfy.render.start', {
-      jobId,
+    const dest = paths.mediaSceneSource(scene.id);
+    await fs.promises.mkdir(path.dirname(dest), { recursive: true });
+    await fs.promises.copyFile(src, dest);
+    sceneSourceById[String(scene.id)] = dest;
+    pipelineLog('media.ingest', {
       sceneId: scene.id,
-      subJobId,
-      drivingEmotion: scene.emotion,
-      chainComfyFrames: chainOn,
-      masterFaceRel: path.relative(paths.jobRoot, masterFacePath),
-      note: 'LivePortrait một lần / cảnh — driving theo emotion cảnh này.',
+      srcRel: path.relative(provider.dataRoot, src),
     });
-    await comfyService.renderVideo({
-      jobId: subJobId,
-      masterFacePath,
-      voiceAudioPath: paths.sceneVoiceMp3(scene.id),
-      rawVideoOutPath: out,
-      drivingEmotion: scene.emotion,
-      ipAdapterReferencePath: ipRef,
-    });
-    sceneRawById[String(scene.id)] = out;
-    pipelineLog('comfy.render.scene_done', {
-      jobId,
-      sceneId: scene.id,
-      rawRel: path.relative(paths.jobRoot, out),
-    });
-    if (chainOn && i < sortedScenes.length - 1) {
-      const nextScene = sortedScenes[i + 1]!;
-      const chainPng = path.join(
-        paths.scenesDir,
-        `chain-master-${nextScene.id}.png`,
-      );
-      await extractLastFramePng(out, chainPng);
-      masterFacePath = chainPng;
-      pipelineLog('comfy.chain_frame', {
-        jobId,
-        fromSceneId: scene.id,
-        nextSceneId: nextScene.id,
-        chainPngRel: path.relative(paths.jobRoot, chainPng),
-      });
-    }
   }
+  meta.media = { sceneSourceById };
 
-  meta.comfy = { sceneRawById, rawVideoPath: paths.comfyRawVideo };
   if (sortedScenes[0]) {
     await fs.promises.copyFile(
-      paths.comfySceneRawVideo(sortedScenes[0].id),
-      paths.comfyRawVideo,
+      paths.mediaSceneSource(sortedScenes[0].id),
+      paths.mediaRawVideo,
     );
   }
-  pipelineLog('comfy.render.done', {
-    jobId,
-    perScene: true,
-    sceneCount: sortedScenes.length,
-    rawVideoPathLegacyMirror: paths.comfyRawVideo,
-  });
 }
 
-async function assembleMultiSceneFromChunks(
-  paths: JobPaths,
-  provider: PathProvider,
-  sortedScenes: ScriptScene[],
-  sceneChunks: SceneAlignmentChunk[],
-  bgmPath?: string,
-): Promise<void> {
+function buildSfxTimeline(args: {
+  sortedScenes: ScriptScene[];
+  sceneChunks: SceneAlignmentChunk[];
+  effective: EffectiveRenderConfig;
+  dataRoot: string;
+}): SfxTimelineEntry[] {
+  const { sortedScenes, sceneChunks, effective, dataRoot } = args;
+  const sfxMap = effective.audio.sfx;
+  const out: SfxTimelineEntry[] = [];
+  const seen = new Set<string>();
+
+  const push = (rel: string | undefined, offsetSec: number) => {
+    if (!rel?.trim()) return;
+    const filePath = resolveDataPath(dataRoot, rel.trim());
+    if (!fs.existsSync(filePath)) return;
+    const key = `${filePath}:${offsetSec.toFixed(3)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ filePath, offsetSec });
+  };
+
+  push(sfxMap.hook, 0);
+
+  let acc = 0;
+  for (let i = 0; i < sortedScenes.length; i++) {
+    const scene = sortedScenes[i]!;
+    const chunk = sceneChunks[i];
+    if (!chunk) break;
+    if (i > 0) push(sfxMap.segment_start, acc);
+    const sk = scene.sfxKey?.trim();
+    if (sk && sfxMap[sk]) push(sfxMap[sk], acc);
+    acc += chunk.durationSec;
+  }
+  return out;
+}
+
+function collectEmphasisWords(scenes: ScriptScene[]): string[] {
+  const acc: string[] = [];
+  for (const s of scenes) {
+    for (const w of s.emphasisWords ?? []) {
+      if (w.trim()) acc.push(w.trim());
+    }
+  }
+  return acc;
+}
+
+async function assembleMultiSceneFromChunks(args: {
+  paths: JobPaths;
+  provider: PathProvider;
+  sortedScenes: ScriptScene[];
+  sceneChunks: SceneAlignmentChunk[];
+  bgmPath?: string;
+  effective: EffectiveRenderConfig;
+}): Promise<void> {
+  const {
+    paths,
+    provider,
+    sortedScenes,
+    sceneChunks,
+    bgmPath,
+    effective,
+  } = args;
+
   await fs.promises.mkdir(paths.scenesDir, { recursive: true });
   pipelineLog('assemble.scenes', {
     count: sortedScenes.length,
     perScene: sortedScenes.map((s) => ({
       id: s.id,
-      emotion: s.emotion,
-      ffmpegMotion: sceneEmotionToFfmpegMotionLabel(s.emotion),
+      motion: sceneMotionToLabel(s.motion),
+      videoMode: s.videoMode ?? effective.video.segmentVideoMode,
     })),
   });
 
-  const rawVideoForScene = (sceneId: number): string => {
-    const per = paths.comfySceneRawVideo(sceneId);
-    if (fs.existsSync(per)) return per;
-    if (fs.existsSync(paths.comfyRawVideo)) return paths.comfyRawVideo;
-    throw new Error(
-      `Thiếu video Comfy cho cảnh ${sceneId}: ${per} (hoặc legacy ${paths.comfyRawVideo})`,
-    );
-  };
-
   for (const scene of sortedScenes) {
-    await createSceneClip({
-      rawVideoPath: rawVideoForScene(scene.id),
+    const src = paths.mediaSceneSource(scene.id);
+    if (!fs.existsSync(src)) {
+      throw new Error(`Missing B-roll source for scene ${scene.id}: ${src}`);
+    }
+    const mode = scene.videoMode ?? effective.video.segmentVideoMode;
+    await createBrollSceneClip({
+      sourceVideoPath: src,
       sceneAudioPath: paths.sceneVoiceMp3(scene.id),
-      emotion: scene.emotion,
+      motion: scene.motion ?? effective.motionDefault,
+      segmentVideoMode: mode,
       outputPath: paths.sceneClipMp4(scene.id),
+      fps: effective.video.outputFps,
     });
   }
 
   const clipPaths = sortedScenes.map((s) => paths.sceneClipMp4(s.id));
   await concatSceneClips(clipPaths, paths.scenesConcatList, paths.scenesConcatMp4);
 
-  const { alignment, normalizedAlignment } = mergeSceneAlignments(sceneChunks);
   const stitchedDuration = sceneChunks.reduce((s, c) => s + c.durationSec, 0);
-  const bgm = resolveBgm(provider, bgmPath);
+  await burnSubtitlesAndBgmOnConcat({
+    paths,
+    provider,
+    sceneChunks,
+    stitchedDuration,
+    bgmPath,
+    effective,
+    sortedScenes,
+  });
+}
+
+async function burnSubtitlesAndBgmOnConcat(args: {
+  paths: JobPaths;
+  provider: PathProvider;
+  sceneChunks: SceneAlignmentChunk[];
+  stitchedDuration: number;
+  bgmPath?: string;
+  effective: EffectiveRenderConfig;
+  sortedScenes: ScriptScene[];
+}): Promise<void> {
+  const {
+    paths,
+    provider,
+    sceneChunks,
+    stitchedDuration,
+    bgmPath,
+    effective,
+    sortedScenes,
+  } = args;
+  const { alignment, normalizedAlignment } = mergeSceneAlignments(sceneChunks);
+  const bgm = resolveBgmPath(provider, effective, bgmPath);
   pipelineLog('assemble.bgm', {
     resolved: Boolean(bgm),
-    bgmPathRelative: bgm
-      ? path.relative(provider.dataRoot, bgm)
-      : undefined,
-    bgmArgProvided: Boolean(bgmPath?.trim()),
-    bgmEnvFallback: Boolean(process.env.BGM_PATH?.trim()),
+    mode: 'premuxed_concat',
+  });
+
+  const sfxTimeline = buildSfxTimeline({
+    sortedScenes,
+    sceneChunks,
+    effective,
+    dataRoot: provider.dataRoot,
   });
 
   await assembleFinalVideoPremuxed({
@@ -407,22 +415,192 @@ async function assembleMultiSceneFromChunks(
     normalizedAlignment,
     actualDurationSec: stitchedDuration,
     bgmPath: bgm,
+    layout: {
+      fontName: effective.ass.fontName,
+      fontSize: effective.ass.fontSize,
+      marginV: effective.ass.marginV,
+      primaryAssColor: effective.ass.primaryColor,
+      highlightAssColor: effective.ass.highlightColor,
+    },
+    emphasisWords: collectEmphasisWords(sortedScenes),
+    sfxTimeline,
+    audioDucking: effective.audio.ducking,
+    bgmVolume: effective.audio.bgmVolume,
   });
 }
 
-async function runContentPipelineInner(input: RunJobInput): Promise<RunJobResult> {
+async function runTtsAndWriteAlignments(
+  paths: JobPaths,
+  sortedScenes: ScriptScene[],
+  effective: EffectiveRenderConfig,
+  meta: JobMeta,
+): Promise<SceneAlignmentChunk[]> {
+  const fullText = scriptScenesFullText(sortedScenes);
+  const elevenVoiceSettings = effective.elevenlabs.voice_settings;
+  const ttsOptsFull = {
+    kind: 'full' as const,
+    voice_settings: elevenVoiceSettings,
+  };
+
+  pipelineLog('tts.full_voice.start', { charCount: fullText.length });
+  const voiceFull = await voiceService.synthesizeWithTimestamps(
+    fullText,
+    paths.audioVoice,
+    ttsOptsFull,
+  );
+  meta.script.actual_duration = voiceFull.actualDurationSec;
+  meta.voice = {
+    audioPath: voiceFull.audioPath,
+    actualDurationSec: voiceFull.actualDurationSec,
+    hasNormalizedAlignment: Boolean(voiceFull.normalizedAlignment),
+  };
+  await writeMeta(paths, meta);
+
+  const sceneChunks: SceneAlignmentChunk[] = [];
+  for (const scene of sortedScenes) {
+    const ttsText = stripMarkdownBoldForTts(scene.text);
+    const v = await voiceService.synthesizeWithTimestamps(
+      ttsText,
+      paths.sceneVoiceMp3(scene.id),
+      {
+        kind: 'scene',
+        sceneId: scene.id,
+        voice_settings: elevenVoiceSettings,
+      },
+    );
+    sceneChunks.push({
+      alignment: v.alignment,
+      normalizedAlignment: v.normalizedAlignment,
+      durationSec: v.actualDurationSec,
+    });
+    await writeSceneAlignmentArtifact(
+      paths,
+      scene.id,
+      v.alignment,
+      v.normalizedAlignment,
+    );
+  }
+  return sceneChunks;
+}
+
+async function runContentPipelineFromTtsResume(
+  input: RunJobInput,
+): Promise<RunJobResult> {
   const provider = createPathProvider();
   const paths = provider.jobPaths(input.jobId);
+  if (!fs.existsSync(paths.metaFile)) {
+    throw new Error(
+      `resumeFrom tts: chưa có meta.json — chạy render đầy đủ trước: ${paths.metaFile}`,
+    );
+  }
+  const rawMeta: unknown = JSON.parse(
+    await fs.promises.readFile(paths.metaFile, 'utf8'),
+  );
+  const loaded = rawMeta as JobMeta;
+  if (!loaded.script?.scenes?.length) {
+    throw new Error(
+      'resumeFrom tts: meta.script.scenes trống — không thể TTS lại',
+    );
+  }
+
+  const profileId =
+    input.profileId?.trim() ||
+    loaded.profileId?.trim() ||
+    defaultProfileId();
+  const effective = await resolveRenderConfig({
+    dataRoot: provider.dataRoot,
+    profileId,
+    jobTuning: input.tuning,
+  });
+
+  const meta: JobMeta = {
+    ...loaded,
+    jobId: input.jobId,
+    profileId: effective.profileId,
+    presetPath: effective.presetPath,
+    presetContentSha256: effective.presetContentSha256,
+    effectiveRenderConfig: effective,
+  };
+  if (input.tuning) meta.tuning = input.tuning;
+
+  await fs.promises.mkdir(paths.jobRoot, { recursive: true });
+  const t0 = Date.now();
+  jobLifecycle('job.start', {
+    event: 'start',
+    pipeline: 'content_tts_resume',
+    jobId: input.jobId,
+    profileId: effective.profileId,
+  });
+
+  const sortedScenes = [...meta.script.scenes].sort((a, b) => a.id - b.id);
+  pipelineLog('pipeline.resume', { from: 'tts', sceneCount: sortedScenes.length });
+
+  const sceneChunks = await runTtsAndWriteAlignments(
+    paths,
+    sortedScenes,
+    effective,
+    meta,
+  );
+
+  await writeDeclarativeSnapshot(paths, meta, effective);
+
+  await ingestBrollSources({
+    paths,
+    provider,
+    sortedScenes,
+    effective,
+    reuseRawVideo: false,
+    meta,
+  });
+  await writeMeta(paths, meta);
+
+  await assembleMultiSceneFromChunks({
+    paths,
+    provider,
+    sortedScenes,
+    sceneChunks,
+    bgmPath: input.bgmPath,
+    effective,
+  });
+
+  pipelineLog('pipeline.done', { jobId: input.jobId, resumeFrom: 'tts' });
+
+  jobLifecycle('job.complete', {
+    event: 'complete',
+    pipeline: 'content_tts_resume',
+    jobId: input.jobId,
+    durationMs: Date.now() - t0,
+    finalVideoPath: paths.finalOutput,
+  });
+
+  return { meta, finalVideoPath: paths.finalOutput };
+}
+
+async function runContentPipelineInner(input: RunJobInput): Promise<RunJobResult> {
+  if (input.resumeFrom === 'tts') {
+    return runContentPipelineFromTtsResume(input);
+  }
+
+  const provider = createPathProvider();
+  const paths = provider.jobPaths(input.jobId);
+  const profileId = input.profileId?.trim() || defaultProfileId();
+  const effective = await resolveRenderConfig({
+    dataRoot: provider.dataRoot,
+    profileId,
+    jobTuning: input.tuning,
+  });
 
   const meta: JobMeta = {
     jobId: input.jobId,
     idea:
       input.idea?.trim() ||
       (input.scenes?.length ? 'Preset scenes (no OpenAI)' : ''),
+    profileId: effective.profileId,
+    presetPath: effective.presetPath,
+    presetContentSha256: effective.presetContentSha256,
+    effectiveRenderConfig: effective,
+    tuning: input.tuning,
     script: { scenes: [] },
-    characterProfile: input.characterProfile,
-    environment: input.environment,
-    visual: input.visual,
   };
 
   await fs.promises.mkdir(paths.jobRoot, { recursive: true });
@@ -431,9 +609,7 @@ async function runContentPipelineInner(input: RunJobInput): Promise<RunJobResult
     event: 'start',
     pipeline: 'content',
     jobId: input.jobId,
-    scriptSource: input.scenes?.length ? 'preset_body' : 'openai',
-    ideaLength: input.idea?.trim()?.length ?? 0,
-    presetSceneCount: input.scenes?.length ?? 0,
+    profileId,
   });
 
   const cps = Number(process.env.CHARS_PER_SECOND ?? '14');
@@ -447,6 +623,8 @@ async function runContentPipelineInner(input: RunJobInput): Promise<RunJobResult
   } else if (input.idea?.trim()) {
     const script = await scriptService.generateScript(input.idea, {
       sessionId: input.jobId,
+      temperature: effective.openai.temperature,
+      model: effective.openai.model,
     });
     sortedScenes = [...script.scenes].sort((a, b) => a.id - b.id);
     durationEstimate =
@@ -456,107 +634,46 @@ async function runContentPipelineInner(input: RunJobInput): Promise<RunJobResult
     throw new Error('Either idea or scenes is required');
   }
 
-  const fullText = scriptScenesFullText(sortedScenes);
-
   meta.script = {
     scenes: sortedScenes,
     duration_estimate: durationEstimate,
   };
   await writeMeta(paths, meta);
-  await writeDeclarativeSnapshot(paths, meta);
+  await writeDeclarativeSnapshot(paths, meta, effective);
 
   pipelineLog('script.resolved', {
     jobId: input.jobId,
-    source: input.scenes?.length ? 'preset_body' : 'openai',
     sceneCount: sortedScenes.length,
-    hookSceneId: sortedScenes[0]?.id,
-    hookEmotion: sortedScenes[0]?.emotion,
-    comfyDrivingPerScene: true,
-    scenes: sortedScenes.map((s) => ({
-      id: s.id,
-      emotion: s.emotion,
-      ffmpegMotion: sceneEmotionToFfmpegMotionLabel(s.emotion),
-      chars: s.text.length,
-    })),
+    profileId,
   });
 
-  pipelineLog('tts.full_voice.start', {
-    jobId: input.jobId,
-    charCount: fullText.length,
-    outPath: paths.audioVoice,
-  });
-  const voiceFull = await voiceService.synthesizeWithTimestamps(
-    fullText,
-    paths.audioVoice,
-    { kind: 'full' },
+  const sceneChunks = await runTtsAndWriteAlignments(
+    paths,
+    sortedScenes,
+    effective,
+    meta,
   );
-  meta.script.actual_duration = voiceFull.actualDurationSec;
-  meta.voice = {
-    audioPath: voiceFull.audioPath,
-    actualDurationSec: voiceFull.actualDurationSec,
-    hasNormalizedAlignment: Boolean(voiceFull.normalizedAlignment),
-  };
-  await writeMeta(paths, meta);
 
-  pipelineLog('tts.full_voice.done', {
-    jobId: input.jobId,
-    actualDurationSec: voiceFull.actualDurationSec,
-    audioPath: paths.audioVoice,
-  });
-
-  const sceneChunks: SceneAlignmentChunk[] = [];
-  for (const scene of sortedScenes) {
-    pipelineLog('tts.scene.start', {
-      jobId: input.jobId,
-      sceneId: scene.id,
-      emotion: scene.emotion,
-      outMp3: paths.sceneVoiceMp3(scene.id),
-    });
-    const v = await voiceService.synthesizeWithTimestamps(
-      scene.text,
-      paths.sceneVoiceMp3(scene.id),
-      { kind: 'scene', sceneId: scene.id },
-    );
-    sceneChunks.push({
-      alignment: v.alignment,
-      normalizedAlignment: v.normalizedAlignment,
-      durationSec: v.actualDurationSec,
-    });
-    await writeSceneAlignmentArtifact(
-      paths,
-      scene.id,
-      v.alignment,
-      v.normalizedAlignment,
-    );
-    pipelineLog('tts.scene.done', {
-      jobId: input.jobId,
-      sceneId: scene.id,
-      durationSec: v.actualDurationSec,
-    });
-  }
-
-  await runComfyPerScenes({
+  await ingestBrollSources({
     paths,
     provider,
-    meta,
-    jobId: input.jobId,
-    reuseRawVideo: false,
     sortedScenes,
+    effective,
+    reuseRawVideo: false,
+    meta,
   });
   await writeMeta(paths, meta);
 
-  await assembleMultiSceneFromChunks(
+  await assembleMultiSceneFromChunks({
     paths,
     provider,
     sortedScenes,
     sceneChunks,
-    input.bgmPath,
-  );
-
-  pipelineLog('pipeline.done', {
-    jobId: input.jobId,
-    finalVideoPath: paths.finalOutput,
+    bgmPath: input.bgmPath,
+    effective,
   });
+
+  pipelineLog('pipeline.done', { jobId: input.jobId });
 
   jobLifecycle('job.complete', {
     event: 'complete',
@@ -572,27 +689,50 @@ async function runContentPipelineInner(input: RunJobInput): Promise<RunJobResult
 export async function runContentPipeline(
   input: RunJobInput,
 ): Promise<RunJobResult> {
-  return startActiveObservation('pipeline.content', async () =>
-    propagateAttributes(
-      {
-        sessionId: input.jobId.slice(0, 200),
-        userId: input.jobId.slice(0, 200),
-        traceName: 'video_render',
-        metadata: {
-          jobId: input.jobId.slice(0, 200),
-          source: (input.scenes?.length ? 'preset_body' : 'openai').slice(0, 200),
+  const provider = createPathProvider();
+  const isTtsResume = input.resumeFrom === 'tts';
+  const ideaPreview = isTtsResume
+    ? 'resume: tts (script từ meta)'
+    : input.idea?.trim().slice(0, 120) ||
+      (input.scenes?.length ? 'preset scenes' : undefined);
+  await notifyJobStarted(provider.dataRoot, {
+    jobId: input.jobId,
+    pipeline: isTtsResume ? 'content_tts_resume' : 'content',
+    profileId: input.profileId?.trim(),
+    ideaPreview,
+  });
+  try {
+    const result = await startActiveObservation('pipeline.content', async () =>
+      propagateAttributes(
+        {
+          sessionId: input.jobId.slice(0, 200),
+          userId: input.jobId.slice(0, 200),
+          traceName: isTtsResume ? 'video_render_tts_resume' : 'video_render',
+          metadata: {
+            jobId: input.jobId.slice(0, 200),
+            source: isTtsResume
+              ? 'tts_resume'
+              : (input.scenes?.length ? 'preset_body' : 'openai').slice(0, 200),
+            resumeFrom: input.resumeFrom ?? '',
+          },
         },
-      },
-      async () => runContentPipelineInner(input),
-    ),
-  );
+        async () => runContentPipelineInner(input),
+      ),
+    );
+    await notifyJobFinished(provider.dataRoot, input.jobId, {
+      ok: true,
+      profileId: result.meta.profileId,
+    });
+    return result;
+  } catch (e) {
+    await notifyJobFinished(provider.dataRoot, input.jobId, {
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+    });
+    throw e;
+  }
 }
 
-/**
- * Continue from Comfy + multi-scene FFmpeg: uses existing `meta.json`,
- * `audio/voice.mp3`, `audio/scene-*.mp3`, and `audio/scene-*.alignment.json`
- * (alignment files are written on the first full `runContentPipeline` run).
- */
 async function runVideoPhaseFromExistingAssetsInner(
   input: RunVideoPhaseInput,
 ): Promise<RunJobResult> {
@@ -605,61 +745,92 @@ async function runVideoPhaseFromExistingAssetsInner(
   const rawMeta: unknown = JSON.parse(
     await fs.promises.readFile(paths.metaFile, 'utf8'),
   );
-  const meta = rawMeta as JobMeta;
-  if (!meta.script?.scenes?.length) {
+  const baseMeta = rawMeta as JobMeta;
+  if (!baseMeta.script?.scenes?.length) {
     throw new Error(`Invalid meta: script.scenes missing (${paths.metaFile})`);
   }
-  if (!fs.existsSync(paths.audioVoice)) {
-    throw new Error(`Missing full voice track (Comfy driver): ${paths.audioVoice}`);
+
+  const profileId =
+    input.profileId?.trim() ||
+    baseMeta.profileId?.trim() ||
+    defaultProfileId();
+  const effective =
+    baseMeta.effectiveRenderConfig &&
+    !input.tuning &&
+    !input.profileId?.trim()
+      ? baseMeta.effectiveRenderConfig
+      : await resolveRenderConfig({
+          dataRoot: provider.dataRoot,
+          profileId,
+          jobTuning: input.tuning,
+        });
+
+  const meta: JobMeta = {
+    ...baseMeta,
+    profileId: effective.profileId,
+    presetPath: effective.presetPath,
+    presetContentSha256: effective.presetContentSha256,
+    effectiveRenderConfig: effective,
+  };
+  if (input.tuning) meta.tuning = input.tuning;
+
+  const assembleOnly = Boolean(input.assembleOnly);
+  if (!assembleOnly && !fs.existsSync(paths.audioVoice)) {
+    throw new Error(`Missing full voice track: ${paths.audioVoice}`);
   }
 
   const t0 = Date.now();
   jobLifecycle('job.start', {
     event: 'start',
-    pipeline: 'from_video',
+    pipeline: assembleOnly ? 'assemble_only' : 'from_video',
     jobId: input.jobId,
-    reuseRawVideo: Boolean(input.reuseRawVideo),
-    bgmPathRequested: Boolean(input.bgmPath?.trim()),
   });
 
   const sortedScenes = [...meta.script.scenes].sort((a, b) => a.id - b.id);
   const sceneChunks = await loadSceneAlignmentChunksFromDisk(paths, sortedScenes);
 
-  pipelineLog('from_video.assets', {
-    jobId: input.jobId,
-    reuseRawVideo: Boolean(input.reuseRawVideo),
-    hookEmotion: sortedScenes[0]?.emotion,
-    sceneCount: sortedScenes.length,
-    perScene: sortedScenes.map((s) => ({
-      id: s.id,
-      emotion: s.emotion,
-      ffmpegMotion: sceneEmotionToFfmpegMotionLabel(s.emotion),
-    })),
-  });
+  await writeDeclarativeSnapshot(paths, meta, effective);
 
-  await writeDeclarativeSnapshot(paths, meta);
+  if (assembleOnly) {
+    if (!fs.existsSync(paths.scenesConcatMp4)) {
+      throw new Error(
+        `assembleOnly: missing ${paths.scenesConcatMp4} — run full render first`,
+      );
+    }
+    const stitchedDuration = sceneChunks.reduce((s, c) => s + c.durationSec, 0);
+    await burnSubtitlesAndBgmOnConcat({
+      paths,
+      provider,
+      sceneChunks,
+      stitchedDuration,
+      bgmPath: input.bgmPath,
+      effective,
+      sortedScenes,
+    });
+  } else {
+    await ingestBrollSources({
+      paths,
+      provider,
+      sortedScenes,
+      effective,
+      reuseRawVideo: Boolean(input.reuseRawVideo),
+      meta,
+    });
+    await writeMeta(paths, meta);
 
-  await runComfyPerScenes({
-    paths,
-    provider,
-    meta,
-    jobId: input.jobId,
-    reuseRawVideo: Boolean(input.reuseRawVideo),
-    sortedScenes,
-  });
-  await writeMeta(paths, meta);
-
-  await assembleMultiSceneFromChunks(
-    paths,
-    provider,
-    sortedScenes,
-    sceneChunks,
-    input.bgmPath,
-  );
+    await assembleMultiSceneFromChunks({
+      paths,
+      provider,
+      sortedScenes,
+      sceneChunks,
+      bgmPath: input.bgmPath,
+      effective,
+    });
+  }
 
   jobLifecycle('job.complete', {
     event: 'complete',
-    pipeline: 'from_video',
+    pipeline: assembleOnly ? 'assemble_only' : 'from_video',
     jobId: input.jobId,
     durationMs: Date.now() - t0,
     finalVideoPath: paths.finalOutput,
@@ -671,18 +842,35 @@ async function runVideoPhaseFromExistingAssetsInner(
 export async function runVideoPhaseFromExistingAssets(
   input: RunVideoPhaseInput,
 ): Promise<RunJobResult> {
-  return startActiveObservation('pipeline.from_video', async () =>
-    propagateAttributes(
-      {
-        sessionId: input.jobId.slice(0, 200),
-        userId: input.jobId.slice(0, 200),
-        traceName: 'video_render_from_video',
-        metadata: {
-          jobId: input.jobId.slice(0, 200),
-          source: 'from_video',
+  const provider = createPathProvider();
+  const pipeline = input.assembleOnly ? 'assemble_only' : 'from_video';
+  await notifyJobStarted(provider.dataRoot, {
+    jobId: input.jobId,
+    pipeline,
+    profileId: input.profileId?.trim(),
+  });
+  try {
+    const result = await startActiveObservation('pipeline.from_video', async () =>
+      propagateAttributes(
+        {
+          sessionId: input.jobId.slice(0, 200),
+          userId: input.jobId.slice(0, 200),
+          traceName: 'video_render_from_video',
+          metadata: { jobId: input.jobId.slice(0, 200) },
         },
-      },
-      async () => runVideoPhaseFromExistingAssetsInner(input),
-    ),
-  );
+        async () => runVideoPhaseFromExistingAssetsInner(input),
+      ),
+    );
+    await notifyJobFinished(provider.dataRoot, input.jobId, {
+      ok: true,
+      profileId: result.meta.profileId,
+    });
+    return result;
+  } catch (e) {
+    await notifyJobFinished(provider.dataRoot, input.jobId, {
+      ok: false,
+      error: e instanceof Error ? e.message : String(e),
+    });
+    throw e;
+  }
 }

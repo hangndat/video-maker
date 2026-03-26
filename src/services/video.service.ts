@@ -4,7 +4,7 @@ import '../shared/ffmpeg-env.js';
 import ffmpeg from 'fluent-ffmpeg';
 import type { CharacterAlignment } from '../types/elevenlabs.js';
 import { characterAlignmentSchema } from '../types/elevenlabs.js';
-import type { SceneEmotion } from '../types/script-schema.js';
+import type { SceneMotion } from '../types/script-schema.js';
 import { ffprobeDurationSec } from '../shared/ffprobe.js';
 import { tokenizeAlignment, type WordSpan } from './tokenize-alignment.js';
 import type { JobPaths } from '../shared/path-provider.js';
@@ -14,10 +14,13 @@ import { pipelineLog } from '../shared/pipeline-log.js';
 export type AssLayoutConfig = {
   playResX: number;
   playResY: number;
-  /** Distance from bottom edge; use ~15% of PlayResY for TikTok safe zone */
   marginV: number;
   fontName: string;
   fontSize: number;
+  /** ASS primary colour &HAABBGGRR */
+  primaryAssColor: string;
+  /** ASS highlight / emphasis colour */
+  highlightAssColor: string;
 };
 
 export type AssembleVideoInput = {
@@ -25,7 +28,6 @@ export type AssembleVideoInput = {
   rawVideoPath: string;
   voiceAudioPath: string;
   alignment: CharacterAlignment;
-  /** If provided, uses normalized_alignment from API instead */
   normalizedAlignment?: CharacterAlignment;
   bgmPath?: string;
   actualDurationSec?: number;
@@ -42,6 +44,8 @@ const defaultLayout = (): AssLayoutConfig => {
     marginV: Math.round(playResY * pct),
     fontName: process.env.ASS_FONT_NAME ?? 'Arial',
     fontSize: Number(process.env.ASS_FONT_SIZE ?? '72'),
+    primaryAssColor: process.env.ASS_PRIMARY_COLOR ?? '&H00FFFFFF',
+    highlightAssColor: process.env.ASS_HIGHLIGHT_COLOR ?? '&H0000BFFF',
   };
 };
 
@@ -63,13 +67,32 @@ function formatAssTimestamp(seconds: number): string {
   return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
 }
 
+function wordEmphasisAss(
+  rawWord: string,
+  layout: AssLayoutConfig,
+  emphasisWords: string[],
+): string {
+  const t = escapeAssToken(rawWord);
+  if (!emphasisWords.length) return t;
+  const lower = rawWord.toLowerCase();
+  const hit = emphasisWords.some(
+    (e) =>
+      lower === e.toLowerCase() || lower.includes(e.toLowerCase()),
+  );
+  if (!hit) return t;
+  const hc = layout.highlightAssColor.replace(/^&H/i, '&H');
+  return `{\\b1\\c${hc}}${t}{\\r}`;
+}
+
 export function buildWordLevelAss(
   words: WordSpan[],
   layout: AssLayoutConfig,
+  emphasisWords: string[] = [],
 ): string {
+  const pc = layout.primaryAssColor.replace(/^&H/i, '&H');
   const header = [
     '[Script Info]',
-    'Title: Ma Chu burn-in',
+    'Title: Cinematic burn-in',
     'ScriptType: v4.00+',
     'WrapStyle: 0',
     'ScaledBorderAndShadow: yes',
@@ -78,7 +101,7 @@ export function buildWordLevelAss(
     '',
     '[V4+ Styles]',
     'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-    `Style: TikTokSafe,${layout.fontName},${layout.fontSize},&H00FFFFFF,&H000000FF,&H00222222,&H80000000,-1,0,0,0,100,100,0,0,3,3,2,2,48,48,${layout.marginV},1`,
+    `Style: TikTokSafe,${layout.fontName},${layout.fontSize},${pc},&H000000FF,&H00222222,&H80000000,-1,0,0,0,100,100,0,0,3,3,2,2,48,48,${layout.marginV},1`,
     '',
     '[Events]',
     'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
@@ -87,14 +110,13 @@ export function buildWordLevelAss(
   const dialogues = words.map((w) => {
     const start = formatAssTimestamp(w.startSec);
     const end = formatAssTimestamp(Math.max(w.endSec, w.startSec + 0.02));
-    const text = escapeAssToken(w.text);
+    const text = wordEmphasisAss(w.text, layout, emphasisWords);
     return `Dialogue: 0,${start},${end},TikTokSafe,,0,0,0,,${text}`;
   });
 
   return `${header}\n${dialogues.join('\n')}\n`;
 }
 
-/** Escapes path for FFmpeg `ass=filename=...` in -filter_complex (Windows drive colons, quotes). */
 export function escapePathForFfmpegSubtitles(filePath: string): string {
   let out = path.resolve(filePath).replace(/\\/g, '/');
   if (/^[A-Za-z]:/.test(out)) out = out.replace(/^([A-Za-z]):/, '$1\\:');
@@ -102,17 +124,17 @@ export function escapePathForFfmpegSubtitles(filePath: string): string {
   return out;
 }
 
-
 export async function writeAssFromAlignment(
   assOutPath: string,
   alignment: CharacterAlignment,
   normalized: CharacterAlignment | undefined,
   layoutPartial?: Partial<AssLayoutConfig>,
+  emphasisWords: string[] = [],
 ): Promise<WordSpan[]> {
   const layout = { ...defaultLayout(), ...layoutPartial };
   const align = normalized ?? alignment;
   const words = tokenizeAlignment(align);
-  const ass = buildWordLevelAss(words, layout);
+  const ass = buildWordLevelAss(words, layout, emphasisWords);
   await fs.promises.mkdir(path.dirname(assOutPath), { recursive: true });
   await fs.promises.writeFile(assOutPath, ass, 'utf8');
   return words;
@@ -125,15 +147,15 @@ function buildAudioFilterComplex(
   mode: AudioMixMode,
   voiceDuration: number,
   bgmFadeOutSec: number,
+  bgmVolume: number,
 ): string {
   if (!hasBgm) return '';
 
   const fadeStart = Math.max(0, voiceDuration - bgmFadeOutSec);
-  // Voice stays full; BGM lowered. Optional sidechain ducking when mode === ducking.
   if (mode === 'simple') {
     return [
       `[1:a]volume=1[a1]`,
-      `[2:a]volume=${process.env.BGM_VOLUME ?? '0.2'},afade=t=out:st=${fadeStart}:d=${bgmFadeOutSec}[a2]`,
+      `[2:a]volume=${bgmVolume},afade=t=out:st=${fadeStart}:d=${bgmFadeOutSec}[a2]`,
       `[a1][a2]amix=inputs=2:duration=first:normalize=0[mix]`,
       `[mix]alimiter=limit=0.95:attack=5:release=50[aout]`,
     ].join(';');
@@ -141,19 +163,19 @@ function buildAudioFilterComplex(
 
   return [
     `[1:a]asplit[a1][vsc]`,
-    `[2:a]volume=${process.env.BGM_VOLUME ?? '0.2'},afade=t=out:st=${fadeStart}:d=${bgmFadeOutSec}[bg]`,
+    `[2:a]volume=${bgmVolume},afade=t=out:st=${fadeStart}:d=${bgmFadeOutSec}[bg]`,
     `[bg][vsc]sidechaincompress=threshold=0.05:ratio=9:attack=20:release=250[bgduck]`,
     `[a1][bgduck]amix=inputs=2:duration=first:normalize=0[mix]`,
     `[mix]alimiter=limit=0.95:attack=5:release=50[aout]`,
   ].join(';');
 }
 
-/** BGM mix when dialogue is already on input 0 (premuxed), BGM on input 1. */
 function buildAudioFilterComplexPremuxed(
   hasBgm: boolean,
   mode: AudioMixMode,
   voiceDuration: number,
   bgmFadeOutSec: number,
+  bgmVolume: number,
 ): string {
   if (!hasBgm) return '';
 
@@ -161,7 +183,7 @@ function buildAudioFilterComplexPremuxed(
   if (mode === 'simple') {
     return [
       `[0:a]volume=1[a1]`,
-      `[1:a]volume=${process.env.BGM_VOLUME ?? '0.2'},afade=t=out:st=${fadeStart}:d=${bgmFadeOutSec}[a2]`,
+      `[1:a]volume=${bgmVolume},afade=t=out:st=${fadeStart}:d=${bgmFadeOutSec}[a2]`,
       `[a1][a2]amix=inputs=2:duration=first:normalize=0[mix]`,
       `[mix]alimiter=limit=0.95:attack=5:release=50[aout]`,
     ].join(';');
@@ -169,7 +191,7 @@ function buildAudioFilterComplexPremuxed(
 
   return [
     `[0:a]asplit[a1][vsc]`,
-    `[1:a]volume=${process.env.BGM_VOLUME ?? '0.2'},afade=t=out:st=${fadeStart}:d=${bgmFadeOutSec}[bg]`,
+    `[1:a]volume=${bgmVolume},afade=t=out:st=${fadeStart}:d=${bgmFadeOutSec}[bg]`,
     `[bg][vsc]sidechaincompress=threshold=0.05:ratio=9:attack=20:release=250[bgduck]`,
     `[a1][bgduck]amix=inputs=2:duration=first:normalize=0[mix]`,
     `[mix]alimiter=limit=0.95:attack=5:release=50[aout]`,
@@ -210,6 +232,7 @@ export function assembleFinalVideo(input: AssembleVideoInput): Promise<void> {
 
       const bgmFadeOut = Number(process.env.BGM_FADE_OUT_SEC ?? '2');
       const hasBgm = Boolean(input.bgmPath && fs.existsSync(input.bgmPath));
+      const bgmVol = Number(process.env.BGM_VOLUME ?? '0.2');
 
       const eff = ffmpeg();
       eff.input(input.rawVideoPath).inputOptions(['-stream_loop', '-1']);
@@ -228,6 +251,7 @@ export function assembleFinalVideo(input: AssembleVideoInput): Promise<void> {
           mixMode,
           voiceDuration,
           bgmFadeOut,
+          bgmVol,
         );
         eff.complexFilter(
           [`[0:v]ass=filename=${assEsc}[vout]`, audioGraph].join(';'),
@@ -264,9 +288,6 @@ export type SceneAlignmentChunk = {
   durationSec: number;
 };
 
-/**
- * Concatenates per-scene ElevenLabs alignments with time offsets for one continuous ASS timeline.
- */
 export function mergeSceneAlignments(
   parts: SceneAlignmentChunk[],
 ): {
@@ -306,54 +327,17 @@ export function mergeSceneAlignments(
   return { alignment, normalizedAlignment };
 }
 
-/** Maps script emotion → FFmpeg motion preset (independent of Comfy driving clip). */
-function sceneEmotionToFfmpegPreset(
-  emotion: SceneEmotion,
-):
-  | 'zoom_in_fast'
-  | 'laugh_zoom'
-  | 'zoom_mild'
-  | 'pan_left'
-  | 'camera_shake' {
-  switch (emotion) {
-    /** Zoom mạnh hơn `zoom_in_fast` để cảnh laugh dễ phân biệt với shake/pan. */
-    case 'laugh':
-      return 'laugh_zoom';
-    case 'zoom_in_fast':
-      return 'zoom_in_fast';
-    /** Khác `laugh`: zoom chậm hơn — trước đây gộp chung khiến cảnh default trông giống cười. */
-    case 'default':
-      return 'zoom_mild';
-    case 'confused':
-    case 'thinking':
-    case 'pan_left':
-      return 'pan_left';
-    case 'angry':
-    case 'camera_shake':
-      return 'camera_shake';
-    default: {
-      const _e: never = emotion;
-      return _e;
-    }
-  }
-}
-
-/** Nhãn preset FFmpeg (log / debug). */
-export function sceneEmotionToFfmpegMotionLabel(emotion: SceneEmotion): string {
-  return sceneEmotionToFfmpegPreset(emotion);
-}
-
-/** Video filter chain after 1080×1920 base scale/crop; prepend `[0:v]` and append `[vout]` in the caller. */
-function buildSceneEmotionVideoFilters(
-  emotion: SceneEmotion,
+function buildBrollMotionChain(
+  motion: SceneMotion,
   durationSec: number,
   fps: number,
 ): string {
-  const preset = sceneEmotionToFfmpegPreset(emotion);
   const base =
     'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1';
   const d = Math.max(0.001, durationSec);
-  switch (preset) {
+  switch (motion) {
+    case 'static':
+      return base;
     case 'zoom_in_fast':
       return `${base},zoompan=z='min(zoom+0.065,1.78)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1080x1920:fps=${fps}`;
     case 'laugh_zoom':
@@ -365,62 +349,110 @@ function buildSceneEmotionVideoFilters(
     case 'camera_shake':
       return `${base},crop=w=trunc(iw*0.9):h=trunc(ih*0.9):x='trunc((iw-ow)/2+14*sin(2*PI*5.5*t))':y='trunc((ih-oh)/2+11*cos(2*PI*6.5*t))'`;
     default: {
-      const _p: never = preset;
-      return _p;
+      const _m: never = motion;
+      return _m;
     }
   }
 }
 
-export type CreateSceneClipInput = {
-  rawVideoPath: string;
+export function sceneMotionToLabel(motion: SceneMotion): string {
+  return motion;
+}
+
+export type CreateBrollSceneClipInput = {
+  sourceVideoPath: string;
   sceneAudioPath: string;
-  emotion: SceneEmotion;
+  motion: SceneMotion;
+  segmentVideoMode: 'freeze_last' | 'loop';
   outputPath: string;
-  /** zoompan output fps; default 30 */
   fps?: number;
 };
 
 /**
- * One scene: loop Comfy raw video to cover scene audio length, apply motion by `emotion`, encode mp4 (H.264 + AAC).
+ * One segment: mux B-roll + scene narration. `freeze_last` plays source once then holds last frame to match audio.
  */
-export function createSceneClip(input: CreateSceneClipInput): Promise<void> {
+export function createBrollSceneClip(input: CreateBrollSceneClipInput): Promise<void> {
   const fps = input.fps ?? 30;
   return new Promise(async (resolve, reject) => {
     try {
-      let durationSec: number;
+      let audioDur: number;
       try {
-        durationSec = await ffprobeDurationSec(input.sceneAudioPath);
+        audioDur = await ffprobeDurationSec(input.sceneAudioPath);
       } catch {
-        durationSec = 1;
+        audioDur = 1;
       }
-      const motion = sceneEmotionToFfmpegPreset(input.emotion);
-      pipelineLog('ffmpeg.scene_clip', {
-        emotion: input.emotion,
-        ffmpegMotion: motion,
-        durationSec,
+      let videoDur: number;
+      try {
+        videoDur = await ffprobeDurationSec(input.sourceVideoPath);
+      } catch {
+        videoDur = 0;
+      }
+      if (videoDur <= 0) {
+        reject(new Error(`B-roll duration invalid: ${input.sourceVideoPath}`));
+        return;
+      }
+
+      const playDur = Math.min(videoDur, audioDur);
+      const padDur = Math.max(0, audioDur - playDur);
+
+      pipelineLog('ffmpeg.broll_clip', {
+        motion: input.motion,
+        segmentVideoMode: input.segmentVideoMode,
+        audioDur,
+        videoDur,
+        playDur,
+        padDur,
         out: path.basename(input.outputPath),
-        note:
-          'Biểu cảm mặt = từ raw-scene-{id}.mp4 (LivePortrait + driving theo cảnh). emotion cảnh chỉ thêm filter camera FFmpeg.',
       });
-      const vChain = buildSceneEmotionVideoFilters(
-        input.emotion,
-        durationSec,
-        fps,
-      );
+
+      const motionChain = buildBrollMotionChain(input.motion, playDur, fps);
       await fs.promises.mkdir(path.dirname(input.outputPath), {
         recursive: true,
       });
 
+      if (input.segmentVideoMode === 'loop') {
+        ffmpeg()
+          .input(input.sourceVideoPath)
+          .inputOptions(['-stream_loop', '-1'])
+          .input(input.sceneAudioPath)
+          .complexFilter(
+            [
+              `[0:v]${motionChain},fps=${fps}[vout]`,
+              `[1:a]anull[aout]`,
+            ].join(';'),
+            ['vout', 'aout'],
+          )
+          .outputOptions(['-shortest', '-map_metadata', '-1'])
+          .videoCodec('libx264')
+          .audioCodec('aac')
+          .output(input.outputPath)
+          .on('start', (cmd) => {
+            if (process.env.DEBUG_FFMPEG === '1') console.error(cmd);
+          })
+          .on('error', (err, _stdout, stderr) => {
+            reject(
+              new Error(`${err.message}${stderr ? '\n' + stderr : ''}`),
+            );
+          })
+          .on('end', () => resolve())
+          .run();
+        return;
+      }
+
+      const padStr = padDur.toFixed(3);
+      const playStr = playDur.toFixed(3);
+      const freezeChain = [
+        `[0:v]${motionChain},fps=${fps},setpts=PTS-STARTPTS[vbase]`,
+        `[vbase]trim=duration=${playStr},setpts=PTS-STARTPTS[vtrim]`,
+        `[vtrim]tpad=stop_mode=clone:stop_duration=${padStr}[vout]`,
+        `[1:a]anull[aout]`,
+      ].join(';');
+
       ffmpeg()
-        .input(input.rawVideoPath)
-        .inputOptions(['-stream_loop', '-1'])
+        .input(input.sourceVideoPath)
         .input(input.sceneAudioPath)
-        .complexFilter(
-          // Force constant 30 fps so concat + audio stay aligned (mixed fps was shortening video vs audio).
-          [`[0:v]${vChain},fps=30[vout]`, `[1:a]anull[aout]`].join(';'),
-          ['vout', 'aout'],
-        )
-        .outputOptions(['-shortest', '-map_metadata', '-1'])
+        .complexFilter(freezeChain, ['vout', 'aout'])
+        .outputOptions(['-map_metadata', '-1'])
         .videoCodec('libx264')
         .audioCodec('aac')
         .output(input.outputPath)
@@ -440,7 +472,6 @@ export function createSceneClip(input: CreateSceneClipInput): Promise<void> {
   });
 }
 
-/** Concat re-encoded scene mp4s (same layout) into one file. */
 export function concatSceneClips(
   clipPaths: string[],
   listFilePath: string,
@@ -496,18 +527,107 @@ export function concatSceneClips(
   })();
 }
 
+export type SfxTimelineEntry = { filePath: string; offsetSec: number };
+
 export type AssemblePremuxedInput = {
   paths: JobPaths;
-  /** Already muxed video + final dialogue (e.g. multi-scene concat). */
   videoWithAudioPath: string;
   alignment: CharacterAlignment;
   normalizedAlignment?: CharacterAlignment;
   bgmPath?: string;
   actualDurationSec?: number;
   layout?: Partial<AssLayoutConfig>;
+  emphasisWords?: string[];
+  sfxTimeline?: SfxTimelineEntry[];
+  /** When true, use effective config ducking instead of env only */
+  audioDucking?: boolean;
+  bgmVolume?: number;
 };
 
-/** Burn ASS and optional BGM onto a single premuxed mp4 (no raw loop / separate voice file). */
+function buildPremuxedComplexFilter(args: {
+  assEsc: string;
+  voiceDuration: number;
+  hasBgm: boolean;
+  bgmPath: string;
+  mixMode: AudioMixMode;
+  bgmFadeOut: number;
+  bgmVolume: number;
+  sfxList: SfxTimelineEntry[];
+}): { filter: string; outputs: string[] } {
+  const { assEsc, voiceDuration, hasBgm, mixMode, bgmFadeOut, bgmVolume } = args;
+  const sfxList = args.sfxList.filter((s) => fs.existsSync(s.filePath));
+
+  const videoPart = `[0:v]ass=filename=${assEsc}[vout]`;
+
+  if (!sfxList.length) {
+    if (!hasBgm) {
+      return {
+        filter: `${videoPart};[0:a]anull[aout]`,
+        outputs: ['vout', 'aout'],
+      };
+    }
+    const audioGraph = buildAudioFilterComplexPremuxed(
+      true,
+      mixMode,
+      voiceDuration,
+      bgmFadeOut,
+      bgmVolume,
+    );
+    return {
+      filter: `${videoPart};${audioGraph}`,
+      outputs: ['vout', 'aout'],
+    };
+  }
+
+  let nextInput = 1 + (hasBgm ? 1 : 0);
+  const parts: string[] = [videoPart];
+  const amixLabels: string[] = [];
+
+  parts.push(`[0:a]anull[avoice]`);
+  amixLabels.push('[avoice]');
+
+  for (let i = 0; i < sfxList.length; i++) {
+    const sfx = sfxList[i]!;
+    const idx = nextInput++;
+    const delayMs = Math.max(0, Math.round(sfx.offsetSec * 1000));
+    const lab = `sfx${i}`;
+    parts.push(
+      `[${idx}:a]adelay=${delayMs}|${delayMs}[${lab}]`,
+    );
+    amixLabels.push(`[${lab}]`);
+  }
+
+  const n = amixLabels.length;
+  parts.push(
+    `${amixLabels.join('')}amix=inputs=${n}:duration=first:normalize=0[amixed]`,
+  );
+
+  if (!hasBgm) {
+    parts.push('[amixed]alimiter=limit=0.95:attack=5:release=50[aout]');
+    return { filter: parts.join(';'), outputs: ['vout', 'aout'] };
+  }
+
+  const fadeStart = Math.max(0, voiceDuration - bgmFadeOut);
+  const bgmIdx = 1;
+  if (mixMode === 'simple') {
+    parts.push(
+      `[${bgmIdx}:a]volume=${bgmVolume},afade=t=out:st=${fadeStart}:d=${bgmFadeOut}[bg]`,
+      `[amixed][bg]amix=inputs=2:duration=first:normalize=0[mixbg]`,
+      `[mixbg]alimiter=limit=0.95:attack=5:release=50[aout]`,
+    );
+  } else {
+    parts.push(
+      `[amixed]asplit[aforbg][vsc]`,
+      `[${bgmIdx}:a]volume=${bgmVolume},afade=t=out:st=${fadeStart}:d=${bgmFadeOut}[bg]`,
+      `[bg][vsc]sidechaincompress=threshold=0.05:ratio=9:attack=20:release=250[bgduck]`,
+      `[aforbg][bgduck]amix=inputs=2:duration=first:normalize=0[mixbg]`,
+      `[mixbg]alimiter=limit=0.95:attack=5:release=50[aout]`,
+    );
+  }
+
+  return { filter: parts.join(';'), outputs: ['vout', 'aout'] };
+}
+
 export function assembleFinalVideoPremuxed(
   input: AssemblePremuxedInput,
 ): Promise<void> {
@@ -517,15 +637,18 @@ export function assembleFinalVideoPremuxed(
     ? characterAlignmentSchema.parse(input.normalizedAlignment)
     : undefined;
 
-  const mixMode = (process.env.AUDIO_MIX_MODE as AudioMixMode) ?? 'simple';
-  if (mixMode !== 'simple' && mixMode !== 'ducking') {
-    throw new Error('AUDIO_MIX_MODE must be simple or ducking');
-  }
+  const mixMode: AudioMixMode =
+    input.audioDucking === true || process.env.AUDIO_MIX_MODE === 'ducking'
+      ? 'ducking'
+      : 'simple';
+  const bgmVol =
+    input.bgmVolume ?? Number(process.env.BGM_VOLUME ?? '0.2');
 
   return new Promise(async (resolve, reject) => {
     try {
+      const emphasis = input.emphasisWords ?? [];
       const words = tokenizeAlignment(normalized ?? alignment);
-      const ass = buildWordLevelAss(words, layout);
+      const ass = buildWordLevelAss(words, layout, emphasis);
       await fs.promises.mkdir(path.dirname(input.paths.subtitlesAss), {
         recursive: true,
       });
@@ -544,29 +667,42 @@ export function assembleFinalVideoPremuxed(
 
       const bgmFadeOut = Number(process.env.BGM_FADE_OUT_SEC ?? '2');
       const hasBgm = Boolean(input.bgmPath && fs.existsSync(input.bgmPath));
+      const sfxList = input.sfxTimeline ?? [];
 
       const eff = ffmpeg();
       eff.input(input.videoWithAudioPath);
-      if (hasBgm) eff.input(input.bgmPath!);
 
-      if (!hasBgm) {
+      let bgmInputAdded = false;
+      if (hasBgm) {
+        eff.input(input.bgmPath!);
+        bgmInputAdded = true;
+      }
+
+      const sfxEntries = sfxList.filter((s) => fs.existsSync(s.filePath));
+      for (const s of sfxEntries) {
+        eff.input(s.filePath);
+      }
+
+      if (!bgmInputAdded && sfxEntries.length === 0) {
         eff.complexFilter(
-          [`[0:v]ass=filename=${assEsc}[vout]`, `[0:a]anull[aout]`].join(
-            ';',
-          ),
+          [
+            `[0:v]ass=filename=${assEsc}[vout]`,
+            `[0:a]anull[aout]`,
+          ].join(';'),
           ['vout', 'aout'],
         );
       } else {
-        const audioGraph = buildAudioFilterComplexPremuxed(
-          true,
-          mixMode,
+        const { filter, outputs } = buildPremuxedComplexFilter({
+          assEsc,
           voiceDuration,
+          hasBgm: bgmInputAdded,
+          bgmPath: input.bgmPath ?? '',
+          mixMode,
           bgmFadeOut,
-        );
-        eff.complexFilter(
-          [`[0:v]ass=filename=${assEsc}[vout]`, audioGraph].join(';'),
-          ['vout', 'aout'],
-        );
+          bgmVolume: bgmVol,
+          sfxList: sfxEntries,
+        });
+        eff.complexFilter(filter, outputs);
       }
 
       eff
@@ -592,10 +728,6 @@ export function assembleFinalVideoPremuxed(
   });
 }
 
-/**
- * Produces a mergeable mp4 for smoke tests when Comfy output is absent.
- * Uses raw ffmpeg (not fluent-ffmpeg) because lavfi format detection breaks with ffmpeg 7+/8+ -formats table vs fluent-ffmpeg regex.
- */
 export async function generateColorBarsVideo(
   outPath: string,
   w = 1080,
@@ -619,7 +751,6 @@ export async function generateColorBarsVideo(
   ]);
 }
 
-/** Một khung gần cuối MP4 — dùng làm ảnh nguồn LivePortrait cho cảnh kế (chain frame). */
 export async function extractLastFramePng(
   videoPath: string,
   outPngPath: string,

@@ -2,18 +2,18 @@
   "scenes": [
     {
       "id": 1,
-      "text": "Hook gắt: Bản tọa không cười ở cảnh một — để Comfy lái bằng angry, không phải laugh.",
-      "emotion": "angry"
+      "text": "Hook: bạn có biết phần lớn những gì TikTok nói về não bộ là không chính xác?",
+      "motion": "zoom_in_fast"
     },
     {
       "id": 2,
-      "text": "Cảnh hai ngắn: trend này nhạt, nhưng TTS vẫn tốn credit — chỉ thử ~mười lăm giây thôi nhé.",
-      "emotion": "laugh"
+      "text": "Sự thật một: ký ức ngắn hạn và dài hạn không lưu ở cùng một vùng như nhiều infographic vẽ.",
+      "motion": "zoom_mild"
     },
     {
       "id": 3,
-      "text": "Kết pan: nhớ bật PIPELINE_LOG=1 nếu debug emotion — FFmpeg từng cảnh khác Comfy hook.",
-      "emotion": "confused"
+      "text": "Sự thật hai: não vẫn tạo neuron mới khi học — plasticity không dừng ở tuổi thiếu niên.",
+      "motion": "pan_left"
     }
   ]
 }

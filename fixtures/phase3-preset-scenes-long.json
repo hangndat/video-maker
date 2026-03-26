@@ -2,13 +2,13 @@
   "scenes": [
     {
       "id": 1,
-      "text": "Bản tọa lên sóng một phút — các ngươi ngồi yên. Trend AI hôm nay, Bản tọa xem thử hết sức tầm thường.",
-      "emotion": "angry"
+      "text": "Mở đầu: khoa học nhận biết có thể làm bạn nghiện kiến thức — nếu bạn biết cách nhìn.",
+      "motion": "camera_shake"
     },
     {
       "id": 2,
-      "text": "Đừng có bấm skip. Câu đầu còn chưa là gì so với twist ở cuối đâu nhé.",
-      "emotion": "laugh"
+      "text": "Tiếp theo: dopamine không chỉ là phần thưởng mà còn là tín hiệu học.",
+      "motion": "static"
     }
   ]
 }

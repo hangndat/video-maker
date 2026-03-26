@@ -1,5 +1,4 @@
-# App orchestrator only. On macOS: run ComfyUI natively (Metal), not inside this compose — see docs/comfy-macos.md.
-# On Linux+GPU you may add your own Comfy service; set COMFY_HTTP_URL / COMFY_WS_URL / COMFY_INPUT_DIR / COMFY_OUTPUT_DIR on the app host.
+# App orchestrator; optional Redis + n8n with profile `full`.
 services:
   app:
     build: .

@@ -4,12 +4,8 @@ import {
   runContentPipeline,
   runVideoPhaseFromExistingAssets,
 } from '../services/pipeline.service.js';
-import { ComfyOutOfMemoryError, ComfyWorkflowError } from '../services/comfy.service.js';
 import { scriptSceneSchema } from '../types/script-schema.js';
-import {
-  characterProfileV1Schema,
-  environmentContextV1Schema,
-} from '../types/character-profile-schema.js';
+import { renderTuningSchema } from '../types/render-preset-schema.js';
 import { runWithLogContext } from '../shared/log-context.js';
 
 export const jobsRenderBodySchema = z
@@ -18,28 +14,30 @@ export const jobsRenderBodySchema = z
     idea: z.string().min(1).max(8000).optional(),
     scenes: z.array(scriptSceneSchema).min(1).optional(),
     bgmPath: z.string().optional(),
-    characterProfile: characterProfileV1Schema.optional(),
-    environment: environmentContextV1Schema.optional(),
-    visual: z
-      .object({
-        chainComfyFrames: z.boolean().optional(),
-        ipAdapterReferencePath: z.string().optional(),
-      })
-      .optional(),
+    profileId: z.string().min(1).max(120).optional(),
+    tuning: renderTuningSchema.optional(),
+    /** Đọc script từ meta.json có sẵn, chạy lại từ ElevenLabs → cuối pipeline. */
+    resumeFrom: z.enum(['tts']).optional(),
   })
   .refine(
-    (d) => Boolean(d.idea?.trim()) || Boolean(d.scenes?.length),
+    (d) =>
+      d.resumeFrom === 'tts' ||
+      Boolean(d.idea?.trim()) ||
+      Boolean(d.scenes?.length),
     {
       message:
-        'Cần gửi idea (OpenAI) hoặc scenes (kịch bản sẵn, không gọi OpenAI).',
+        'Cần idea hoặc scenes, trừ khi resumeFrom: "tts" (meta.json đã có script).',
       path: ['idea'],
     },
   );
 
-const renderFromVideoBody = z.object({
+export const jobsRenderFromVideoBodySchema = z.object({
   jobId: z.string().min(1).max(200),
   bgmPath: z.string().optional(),
   reuseRawVideo: z.boolean().optional(),
+  assembleOnly: z.boolean().optional(),
+  profileId: z.string().min(1).max(120).optional(),
+  tuning: renderTuningSchema.optional(),
 });
 
 export const jobsRouter = Router();
@@ -64,22 +62,6 @@ jobsRouter.post('/render', async (req, res) => {
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (e instanceof ComfyWorkflowError) {
-      req.log.warn(
-        { err: e, jobId: body.jobId, requestId: String(req.id), httpStatus: 502 },
-        'jobs.render comfy workflow',
-      );
-      res.status(502).json({ ok: false, error: msg });
-      return;
-    }
-    if (e instanceof ComfyOutOfMemoryError) {
-      req.log.warn(
-        { err: e, jobId: body.jobId, requestId: String(req.id), httpStatus: 503 },
-        'jobs.render comfy oom',
-      );
-      res.status(503).json({ ok: false, error: msg });
-      return;
-    }
     req.log.error(
       { err: e, jobId: body.jobId, requestId: String(req.id) },
       'jobs.render failed',
@@ -89,7 +71,7 @@ jobsRouter.post('/render', async (req, res) => {
 });
 
 jobsRouter.post('/render/from-video', async (req, res) => {
-  const parsed = renderFromVideoBody.safeParse(req.body);
+  const parsed = jobsRenderFromVideoBodySchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.flatten() });
     return;
@@ -117,7 +99,7 @@ jobsRouter.post('/render/from-video', async (req, res) => {
       return;
     }
     if (
-      /Missing scene alignment|Missing scene audio|Invalid meta|Missing full voice|reuseRawVideo: missing/i.test(
+      /Missing scene alignment|Missing scene audio|Invalid meta|Missing full voice|reuseRawVideo: missing|assembleOnly: missing/i.test(
         msg,
       )
     ) {
@@ -126,22 +108,6 @@ jobsRouter.post('/render/from-video', async (req, res) => {
         'jobs.from_video bad request',
       );
       res.status(400).json({ ok: false, error: msg });
-      return;
-    }
-    if (e instanceof ComfyWorkflowError) {
-      req.log.warn(
-        { err: e, jobId: body.jobId, requestId: String(req.id), httpStatus: 502 },
-        'jobs.from_video comfy workflow',
-      );
-      res.status(502).json({ ok: false, error: msg });
-      return;
-    }
-    if (e instanceof ComfyOutOfMemoryError) {
-      req.log.warn(
-        { err: e, jobId: body.jobId, requestId: String(req.id), httpStatus: 503 },
-        'jobs.from_video comfy oom',
-      );
-      res.status(503).json({ ok: false, error: msg });
       return;
     }
     req.log.error(

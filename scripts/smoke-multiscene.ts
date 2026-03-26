@@ -1,6 +1,5 @@
 /**
- * $0 multi-scene smoke: synthetic MP3 + alignment per scene → full pipeline via
- * runVideoPhaseFromExistingAssets (SKIP_COMFY=1 placeholder raw).
+ * Multi-scene smoke: synthetic MP3 + alignment per scene → from-video pipeline (B-roll placeholder).
  */
 import 'dotenv/config';
 import fs from 'node:fs';
@@ -12,38 +11,40 @@ import { generateSineMp3 } from '../src/services/video.service.js';
 import { runVideoPhaseFromExistingAssets } from '../src/services/pipeline.service.js';
 import type { JobMeta } from '../src/types/job-meta.js';
 import type { CharacterAlignment } from '../src/types/elevenlabs.js';
-import type { SceneEmotion, ScriptScene } from '../src/types/script-schema.js';
+import type { SceneMotion, ScriptScene } from '../src/types/script-schema.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
 
 process.env.DATA_ROOT =
   process.env.DATA_ROOT ?? path.join(repoRoot, 'shared_data');
+process.env.RENDER_PROFILE_ID =
+  process.env.RENDER_PROFILE_ID ?? 'cinematic_mystery';
 
-const ROTATE_EMOTIONS: SceneEmotion[] = [
-  'laugh',
-  'angry',
-  'confused',
-  'thinking',
-  'default',
+const ROTATE_MOTION: SceneMotion[] = [
+  'zoom_mild',
+  'pan_left',
+  'static',
+  'zoom_in_fast',
+  'camera_shake',
 ];
 
 const SNIPPETS_VI = [
-  'Bản tọa lên sóng, trend này nhạt quá.',
-  'Hả? Công nghệ lại làm Bản tọa bối rối rồi.',
-  'Ma Chủ cười khẩy, các ngươi đoán sai hết rồi.',
-  'Thôi được, để Bản tọa giải thích một lần cho rõ.',
-  'TikTok zone này… Bản tọa thấy bất ổn quá.',
-  'Suy cho cùng, trend hay do người đọc mà thôi.',
-  'Bực thật, sao cứ nhảy vào mặt Bản tọa thế?',
-  'Tỉnh táo nào, twist nằm ở câu cuối đấy.',
-  'Các ngươi bấm like chỉ vì hình Shrek đúng không?',
-  'Bản tọa không tin AI đọc được sắc mặt này.',
-  'Khoan đã, điện thoại Bản tọa đang lag kìa.',
-  'Kết: dù sao Bản tọa vẫn là trùm khu vực này.',
-  'Một câu nữa cho đủ beat, smoke multiscene thôi.',
-  'Giọng Bản tọa hay hơn filter mười lớp rồi.',
-  'Xong phim, đi ngủ.',
+  'Cảnh một — không gian cho thử nghiệm pipeline.',
+  'Cảnh hai — vẫn là sóng sinh cho TTS giả lập.',
+  'Cảnh ba — kiểm tra concat và alignment.',
+  'Cảnh bốn — đủ để stress test nhiều đoạn.',
+  'Năm. Sáu. Bảy. Giữ nhịp.',
+  'Tám — còn tiếp.',
+  'Chín.',
+  'Mười.',
+  'Mười một.',
+  'Mười hai.',
+  'Mười ba.',
+  'Mười bốn.',
+  'Mười lăm.',
+  'Mười sáu — gần xong.',
+  'Xong smoke multiscene.',
 ];
 
 function buildLinearAlignment(
@@ -77,7 +78,7 @@ function buildScenes(n: number): ScriptScene[] {
     scenes.push({
       id: i,
       text,
-      emotion: ROTATE_EMOTIONS[(i - 1) % ROTATE_EMOTIONS.length]!,
+      motion: ROTATE_MOTION[(i - 1) % ROTATE_MOTION.length]!,
     });
   }
   return scenes;
@@ -108,7 +109,6 @@ async function concatMp3Files(
   await fs.promises.unlink(listPath).catch(() => {});
 }
 
-/** Default job folder avoids clobbering: T1.1 (3×2s) vs full (~12×5s) get different paths unless JOB_ID is set. */
 function defaultSmokeMultisceneJobId(n: number, sceneSec: number): string {
   const secPart = String(sceneSec).replace(/\./g, 'p');
   return `smoke-multiscene-${n}x${secPart}s`;
@@ -119,8 +119,6 @@ async function main(): Promise<void> {
   const sceneSec = Math.max(0.5, Number(process.env.SMOKE_MULTISCENE_SCENE_SEC ?? '5'));
   const jobId =
     process.env.SMOKE_MULTISCENE_JOB_ID ?? defaultSmokeMultisceneJobId(n, sceneSec);
-
-  process.env.SKIP_COMFY = '1';
 
   const provider = createPathProvider();
   const paths = provider.jobPaths(jobId);
@@ -154,6 +152,7 @@ async function main(): Promise<void> {
   const totalEstimate = n * sceneSec;
   const meta: JobMeta = {
     jobId,
+    profileId: 'cinematic_mystery',
     idea: 'smoke-multiscene local fixture (no OpenAI/ElevenLabs)',
     script: {
       scenes,

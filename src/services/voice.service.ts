@@ -17,7 +17,37 @@ export type VoiceSynthesisResult = {
 export type SynthesizeTtsOptions = {
   kind: 'full' | 'scene';
   sceneId?: number;
+  voice_settings?: {
+    stability?: number;
+    similarity_boost?: number;
+    style?: number;
+    use_speaker_boost?: boolean;
+  };
 };
+
+function mergeVoiceSettings(
+  fromOpts?: SynthesizeTtsOptions['voice_settings'],
+): Record<string, number | boolean> | undefined {
+  const vs: Record<string, number | boolean> = {
+    ...(fromOpts?.stability != null ? { stability: fromOpts.stability } : {}),
+    ...(fromOpts?.similarity_boost != null
+      ? { similarity_boost: fromOpts.similarity_boost }
+      : {}),
+    ...(fromOpts?.style != null ? { style: fromOpts.style } : {}),
+    ...(fromOpts?.use_speaker_boost != null
+      ? { use_speaker_boost: fromOpts.use_speaker_boost }
+      : {}),
+  };
+  const s = process.env.ELEVENLABS_STABILITY;
+  const sim = process.env.ELEVENLABS_SIMILARITY_BOOST;
+  const st = process.env.ELEVENLABS_STYLE;
+  if (s != null && vs.stability === undefined) vs.stability = Number(s);
+  if (sim != null && vs.similarity_boost === undefined) {
+    vs.similarity_boost = Number(sim);
+  }
+  if (st != null && vs.style === undefined) vs.style = Number(st);
+  return Object.keys(vs).length ? vs : undefined;
+}
 
 function ttsInputForTrace(text: string): string | { charCount: number } {
   if (process.env.LANGFUSE_LOG_TTS_TEXT === '1') return text;
@@ -85,6 +115,13 @@ export class VoiceService {
         );
         url.searchParams.set('output_format', outputFormat);
 
+        const voiceSettings = mergeVoiceSettings(traceOpts?.voice_settings);
+        const payload: Record<string, unknown> = {
+          text,
+          model_id: modelId,
+        };
+        if (voiceSettings) payload.voice_settings = voiceSettings;
+
         const res = await fetch(url, {
           method: 'POST',
           headers: {
@@ -92,10 +129,7 @@ export class VoiceService {
             'Content-Type': 'application/json',
             Accept: 'application/json',
           },
-          body: JSON.stringify({
-            text,
-            model_id: modelId,
-          }),
+          body: JSON.stringify(payload),
         });
 
         if (!res.ok) {

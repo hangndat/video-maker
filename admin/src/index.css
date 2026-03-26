@@ -1,0 +1,68 @@
+body {
+  margin: 0;
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    sans-serif;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+/* --- Layout kiểu content-company: khối nội dung trắng + section stack --- */
+.cc-main-content-surface {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.04),
+    0 4px 24px rgba(0, 0, 0, 0.04);
+  padding: clamp(18px, 2.2vw, 26px) clamp(18px, 2.8vw, 32px) clamp(22px, 2.8vw, 32px);
+  box-sizing: border-box;
+  min-height: calc(100vh - 72px);
+}
+
+.cc-page-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  gap: clamp(18px, 2.2vw, 26px);
+}
+
+.cc-page-header {
+  margin: 0;
+  padding-bottom: clamp(14px, 2vw, 20px);
+  margin-bottom: 2px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.cc-page-toolbar {
+  padding: 12px 14px;
+  background: #fafafa;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  box-sizing: border-box;
+}
+
+.cc-main-content-surface .ant-card {
+  box-shadow: none !important;
+  border-color: #ececec !important;
+}
+
+.cc-main-content-surface .ant-card .ant-card-head {
+  border-bottom-color: #f0f0f0;
+  min-height: 48px;
+}
+
+.cc-main-content-surface .ant-card .ant-card-head-title {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+@media (max-width: 768px) {
+  .cc-main-content-surface {
+    border-radius: 8px;
+    padding: 12px 10px 16px;
+    min-height: calc(100dvh - 96px);
+  }
+}

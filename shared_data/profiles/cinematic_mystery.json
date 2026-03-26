@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "ass": {
+    "fontName": "Arial",
+    "fontSize": 72,
+    "primaryColor": "&H00E6D4A8",
+    "highlightColor": "&H0000FFFF",
+    "marginV": 288
+  },
+  "videoDefault": {
+    "segmentVideoMode": "freeze_last",
+    "outputFps": 30,
+    "placeholderRelativePath": "assets/broll/placeholder.mp4"
+  },
+  "motionDefault": "zoom_mild",
+  "audio": {
+    "bgmVolume": 0.22,
+    "ducking": true,
+    "sfx": {
+      "hook": "assets/sfx/hook.mp3",
+      "segment_start": "assets/sfx/woosh.mp3"
+    }
+  },
+  "openai": {
+    "temperature": 0.75
+  },
+  "elevenlabs": {
+    "voice_settings": {
+      "stability": 0.45,
+      "similarity_boost": 0.72,
+      "style": 0.35
+    }
+  }
+}

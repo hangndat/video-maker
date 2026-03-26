@@ -1,5 +1,5 @@
 /**
- * Smoke: extractLastFramePng — không gọi OpenAI/ElevenLabs/Comfy.
+ * Smoke: extractLastFramePng — không gọi OpenAI/ElevenLabs.
  * Tạo MP4 test 1s bằng ffmpeg rồi trích frame cuối ra PNG.
  */
 import 'dotenv/config';
@@ -10,7 +10,7 @@ import { extractLastFramePng } from '../src/services/video.service.js';
 import { runFfmpeg } from '../src/shared/ffmpeg-run.js';
 
 async function main(): Promise<void> {
-  const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ma-chu-smoke-chain-'));
+  const tmp = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'video-maker-smoke-chain-'));
   const mp4 = path.join(tmp, 'one-sec.mp4');
   const png = path.join(tmp, 'last.png');
 

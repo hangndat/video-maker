@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-03-26T16:03:19.868Z",
+  "jobs": {
+    "job-mn7nf4oa-ifgc5": {
+      "jobId": "job-mn7nf4oa-ifgc5",
+      "status": "completed",
+      "pipeline": "content",
+      "profileId": "cinematic_mystery",
+      "ideaPreview": "Video tối đa 60 giây: mở đầu gây tò mò, ba sự thật thú vị về một chủ đề khoa học, kết bằng lời kêu gọi ngắn.",
+      "startedAt": "2026-03-26T15:50:06.240Z",
+      "completedAt": "2026-03-26T15:50:23.013Z",
+      "updatedAt": "2026-03-26T15:50:23.013Z"
+    },
+    "job-mn7nmzgj-8w7sl": {
+      "jobId": "job-mn7nmzgj-8w7sl",
+      "status": "completed",
+      "pipeline": "content_tts_resume",
+      "profileId": "cinematic_mystery",
+      "ideaPreview": "resume: tts (script từ meta)",
+      "startedAt": "2026-03-26T16:03:13.353Z",
+      "completedAt": "2026-03-26T16:03:19.868Z",
+      "updatedAt": "2026-03-26T16:03:19.868Z"
+    }
+  }
+}

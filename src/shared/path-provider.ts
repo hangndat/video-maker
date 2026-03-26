@@ -5,17 +5,14 @@ export type JobPaths = {
   inputDir: string;
   audioDir: string;
   audioVoice: string;
-  /** Per-scene ElevenLabs MP3: audioDir/scene-{id}.mp3 */
   sceneVoiceMp3: (sceneId: number) => string;
-  /** Saved alignment for resume (no re‑TTS): audioDir/scene-{id}.alignment.json */
   sceneAlignmentJson: (sceneId: number) => string;
   subtitlesDir: string;
   subtitlesAss: string;
-  comfyDir: string;
-  comfyRawVideo: string;
-  /** LivePortrait output cho đúng cảnh (driving theo `emotion` cảnh đó). */
-  comfySceneRawVideo: (sceneId: number) => string;
-  /** FFmpeg per-scene processed clips */
+  /** B-roll staging: `media/scenes/source-{id}.mp4` */
+  mediaDir: string;
+  mediaRawVideo: string;
+  mediaSceneSource: (sceneId: number) => string;
   scenesDir: string;
   sceneClipMp4: (sceneId: number) => string;
   scenesConcatList: string;
@@ -33,19 +30,20 @@ function ensureDataRoot(): string {
 }
 
 /**
- * Centralizes all job paths under `/data/jobs/{jobId}` (or DATA_ROOT).
+ * Centralizes all job paths under `DATA_ROOT/jobs/{jobId}`.
  */
 export function createPathProvider(dataRoot = ensureDataRoot()) {
   const assetsRoot = () => path.join(dataRoot, 'assets');
   const jobsRoot = () => path.join(dataRoot, 'jobs');
   const finalPublishedRoot = () => path.join(dataRoot, 'final');
+  const profilesRoot = () => path.join(dataRoot, 'profiles');
 
   const jobPaths = (jobId: string): JobPaths => {
     const jobRoot = path.join(dataRoot, 'jobs', jobId);
     const audioDir = path.join(jobRoot, 'audio');
     const subtitlesDir = path.join(jobRoot, 'subtitles');
-    const comfyDir = path.join(jobRoot, 'comfy');
-    const scenesDir = path.join(comfyDir, 'scenes');
+    const mediaDir = path.join(jobRoot, 'media');
+    const scenesDir = path.join(mediaDir, 'scenes');
     const finalDir = path.join(jobRoot, 'final');
     const declarativeDir = path.join(jobRoot, 'declarative');
     return {
@@ -59,10 +57,10 @@ export function createPathProvider(dataRoot = ensureDataRoot()) {
         path.join(audioDir, `scene-${sceneId}.alignment.json`),
       subtitlesDir,
       subtitlesAss: path.join(subtitlesDir, 'burn.ass'),
-      comfyDir,
-      comfyRawVideo: path.join(comfyDir, 'raw.mp4'),
-      comfySceneRawVideo: (sceneId: number) =>
-        path.join(scenesDir, `raw-scene-${sceneId}.mp4`),
+      mediaDir,
+      mediaRawVideo: path.join(mediaDir, 'raw.mp4'),
+      mediaSceneSource: (sceneId: number) =>
+        path.join(scenesDir, `source-${sceneId}.mp4`),
       scenesDir,
       sceneClipMp4: (sceneId: number) =>
         path.join(scenesDir, `clip-${sceneId}.mp4`),
@@ -81,9 +79,8 @@ export function createPathProvider(dataRoot = ensureDataRoot()) {
     assetsRoot,
     jobsRoot,
     finalPublishedRoot,
+    profilesRoot,
     jobPaths,
-    masterFace: () => path.join(assetsRoot(), 'Master_Face.png'),
-    drivingVideosDir: () => path.join(assetsRoot(), 'Driving_Videos'),
   };
 }
 

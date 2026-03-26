@@ -6,8 +6,6 @@ shared_data/jobs/
 *.mp3
 *.ass
 .DS_Store
-shared_data/comfy_input/
-shared_data/comfy_output/
 logs/
 shared_data/logs/
 .env.langfuse

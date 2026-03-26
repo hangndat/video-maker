@@ -9,25 +9,25 @@ import {
 
 const CHARS_PER_SEC = Number(process.env.CHARS_PER_SECOND ?? '14');
 
-const MA_CHU_SYSTEM = `Bạn là "Ma Chủ" — persona kịch bản TikTok: ngạo kiều, coi thường công nghệ hiện đại nhưng hay bị nó làm bối rối; xưng "Bản tọa"; giọng hài hước, không quá nghiêm túc.
+const CINEMATIC_SYSTEM = `Bạn là biên kịch kênh "Điện ảnh hóa kiến thức" — giọng kể tri thức, cinematic, tiếng Việt tự nhiên, gây tò mò và tôn trọng người nghe.
 
-Trả về MỘT object JSON với đúng key: "scenes" (và tùy chọn "duration_estimate").
-- scenes: mảng các cảnh thoại, MỖI phần tử có "id" (số nguyên 1..n), "text" (1–2 câu tiếng Việt, giọng Ma Chủ), "emotion" chọn theo **khí chất thoại** (ảnh hưởng video lái Comfy + hiệu ứng camera FFmpeg):
-  - "laugh" — cười, chế giễu, punchline vui
-  - "angry" — gắt, bực, dằn mặt trend
-  - "confused" — bối rối, không hiểu công nghệ
-  - "thinking" — suy tư, tỉnh táo, twist
-  - "default" — ngạo mạn “bản tọa”, bình thường
-  Có thể thêm xen kẽ (hiếm) các nhãn kỹ thuật cũ: "zoom_in_fast", "pan_left", "camera_shake" nếu cần đúng shot cụ thể.
-- duration_estimate: số (có thể 0 hoặc bỏ qua; hệ thống có thể ước lượng lại từ audio).
+Trả về MỘT object JSON: "scenes" (và tùy chọn "duration_estimate"). Không có key khác.
 
-Mặc định (video ngắn): tạo **2–4 cảnh** có id tăng dần, mỗi cảnh **1–2 câu**.
+**Cấu trúc bắt buộc: đúng 5 cảnh** id 1→5:
+1. **Hook** (1–2 câu ngắn): câu hỏi ngược hoặc khẳng định gây sốc (~3 giây đọc).
+2–4. **Ba sự thật** tăng tiến (mỗi cảnh 2–4 câu, ~10–12 giây đọc): cái sau bất ngờ hơn cái trước.
+5. **CTA** (1–2 câu): kêu gọi comment / tương tác nhẹ nhàng.
 
-Khi chủ đề / ý tưởng yêu cầu video dài (~**55–65 giây** thoại), TikTok dài, hoặc **nhiều phân cảnh**: tạo **10–16 cảnh**, mỗi cảnh **2–4 câu** tiếng Việt, xen kẽ emotion; tổng nội dung đủ để đọc khoảng một phút (không cắt câu giữa chừng).
+Mỗi phần tử scenes có:
+- "id": 1..5
+- "text": thoại **thuần** cho TTS (tiếng Việt), **không** dùng markdown **...**
+- "motion": một trong: "static" | "zoom_mild" | "zoom_in_fast" | "laugh_zoom" | "pan_left" | "camera_shake" — gợi cảm giác hình: hook có thể "zoom_in_fast" hoặc "camera_shake"; sự thật thường "zoom_mild" / "pan_left"; CTA "static" hoặc "zoom_mild".
+- "emphasisWords" (tuỳ chọn): tối đa 6 chuỗi — từ/cụm sẽ hiển thị **đậm** trên phụ đề (phải xuất hiện nguyên văn trong "text").
+- "videoPath" (tuỳ chọn): nếu có, đường dẫn MP4 B-roll **relative DATA_ROOT** (vd. "assets/broll/topic.mp4"). Thường **bỏ trống** — pipeline dùng placeholder từ preset.
+- "videoMode" (tuỳ chọn): "freeze_last" | "loop" — mặc định theo preset.
+- "sfxKey" (tuỳ chọn): key trong preset sfx map (vd. "hook") — thường bỏ trống.
 
-Emoji trong \`text\`: có thể dùng **vừa phải** để phụ đề sinh động; lưu ý TTS có thể bỏ qua hoặc phát âm kém với một số ký tự — ưu tiên thoại rõ nghĩa.
-
-Luôn: cảnh id=1 (hook) nên có emotion phù hợp — hệ thống dùng emotion cảnh đầu để chọn **driving video** LivePortrait.`;
+Tổng thoại mục tiêu ~45–60 giây. duration_estimate (tuỳ chọn): số giây ước lượng.`;
 
 function stripJsonFence(raw: string): string {
   let s = raw.trim();
@@ -41,8 +41,9 @@ function roughDurationFromScenes(textJoined: string): number {
 }
 
 export type GenerateScriptOptions = {
-  /** Gắn OpenAI/Langfuse session (thường = jobId). */
   sessionId?: string;
+  temperature?: number;
+  model?: string;
 };
 
 export class ScriptService {
@@ -54,7 +55,12 @@ export class ScriptService {
   ): Promise<ScriptOutput> {
     if (!this.apiKey) throw new Error('OPENAI_API_KEY is not set');
 
-    const model = process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
+    const model =
+      options?.model ?? process.env.OPENAI_MODEL ?? 'gpt-4o-mini';
+    const temperature =
+      options?.temperature ??
+      Number(process.env.OPENAI_TEMPERATURE ?? '0.75');
+
     const base = new OpenAI({
       apiKey: this.apiKey,
       baseURL: process.env.OPENAI_BASE_URL || undefined,
@@ -63,13 +69,12 @@ export class ScriptService {
     const client = observeOpenAI(
       base,
       sessionId
-        ? { sessionId, userId: sessionId, traceName: 'ma_chu_script' }
-        : { traceName: 'ma_chu_script' },
+        ? { sessionId, userId: sessionId, traceName: 'cinematic_script' }
+        : { traceName: 'cinematic_script' },
     );
 
     let lastErr: unknown;
-    const fixHint =
-      'Lần trước JSON sai. Trả DUY NHẤT object JSON: {"scenes":[{"id":1,"text":"...","emotion":"laugh|angry|confused|thinking|default|zoom_in_fast|pan_left|camera_shake"},...]}';
+    const fixHint = `JSON sai. Trả DUY NHẤT: {"scenes":[{"id":1,"text":"...","motion":"static|zoom_mild|zoom_in_fast|laugh_zoom|pan_left|camera_shake","emphasisWords":["..."],"videoPath":"optional","videoMode":"optional","sfxKey":"optional"}, ... đúng 5 phần tử id 1..5]}`;
 
     pipelineLog('agent.openai.script.start', {
       ideaLength: idea.length,
@@ -80,16 +85,16 @@ export class ScriptService {
     for (let attempt = 0; attempt < 3; attempt++) {
       const userContent =
         attempt === 0
-          ? `Chủ đề / trend: ${idea}`
+          ? `Chủ đề / góc nhìn video: ${idea}`
           : `${fixHint}\nChủ đề: ${idea}`;
 
       try {
         const completion = await client.chat.completions.create({
           model,
-          temperature: 0.85,
+          temperature,
           response_format: { type: 'json_object' },
           messages: [
-            { role: 'system', content: MA_CHU_SYSTEM },
+            { role: 'system', content: CINEMATIC_SYSTEM },
             { role: 'user', content: userContent },
           ],
         });
@@ -111,6 +116,25 @@ export class ScriptService {
             attempt,
             reason: 'schema_validation',
             issueCount: safe.error.issues.length,
+            sessionId: sessionId ?? null,
+          });
+          continue;
+        }
+        if (safe.data.scenes.length !== 5) {
+          lastErr = new Error(`Expected 5 scenes, got ${safe.data.scenes.length}`);
+          pipelineLog('agent.openai.script.attempt_failed', {
+            attempt,
+            reason: 'scene_count',
+            sessionId: sessionId ?? null,
+          });
+          continue;
+        }
+        const ids = safe.data.scenes.map((s) => s.id).sort((a, b) => a - b);
+        if (ids.join(',') !== '1,2,3,4,5') {
+          lastErr = new Error('Scene ids must be exactly 1,2,3,4,5');
+          pipelineLog('agent.openai.script.attempt_failed', {
+            attempt,
+            reason: 'scene_ids',
             sessionId: sessionId ?? null,
           });
           continue;
