@@ -15,7 +15,10 @@ export type JobMeta = {
   };
   comfy?: {
     promptId?: string;
+    /** Bản mirror cảnh đầu hoặc file legacy một-track; ưu tiên `sceneRawById` khi có. */
     rawVideoPath?: string;
+    /** raw-scene-{id}.mp4 sau Comfy từng cảnh */
+    sceneRawById?: Record<string, string>;
   };
   errors?: string[];
 };

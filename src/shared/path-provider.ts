@@ -13,6 +13,8 @@ export type JobPaths = {
   subtitlesAss: string;
   comfyDir: string;
   comfyRawVideo: string;
+  /** LivePortrait output cho đúng cảnh (driving theo `emotion` cảnh đó). */
+  comfySceneRawVideo: (sceneId: number) => string;
   /** FFmpeg per-scene processed clips */
   scenesDir: string;
   sceneClipMp4: (sceneId: number) => string;
@@ -56,6 +58,8 @@ export function createPathProvider(dataRoot = ensureDataRoot()) {
       subtitlesAss: path.join(subtitlesDir, 'burn.ass'),
       comfyDir,
       comfyRawVideo: path.join(comfyDir, 'raw.mp4'),
+      comfySceneRawVideo: (sceneId: number) =>
+        path.join(scenesDir, `raw-scene-${sceneId}.mp4`),
       scenesDir,
       sceneClipMp4: (sceneId: number) =>
         path.join(scenesDir, `clip-${sceneId}.mp4`),

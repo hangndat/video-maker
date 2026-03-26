@@ -3,62 +3,12 @@
     {
       "id": 1,
       "text": "Bản tọa lên sóng một phút — các ngươi ngồi yên. Trend AI hôm nay, Bản tọa xem thử hết sức tầm thường.",
-      "emotion": "laugh"
+      "emotion": "angry"
     },
     {
       "id": 2,
       "text": "Đừng có bấm skip. Câu đầu còn chưa là gì so với twist ở cuối đâu nhé.",
-      "emotion": "default"
-    },
-    {
-      "id": 3,
-      "text": "Nghe đây: máy các ngươi gọi là thông minh, mà một dòng code typo là nó tuyệt vọng luôn. Kẻ mạnh là ai?",
-      "emotion": "angry"
-    },
-    {
-      "id": 4,
-      "text": "Ủa… sao cái nút này nhỏ dữ vậy? Bản tọa chưa già mà đã bối rối với UX rồi nè.",
-      "emotion": "confused"
-    },
-    {
-      "id": 5,
-      "text": "Suy cho cùng, người xem chỉ cần một hook hay, một nhịp chậm, rồi punchline. Bản tọa làm đủ cả ba.",
-      "emotion": "thinking"
-    },
-    {
-      "id": 6,
-      "text": "Một emoji cho vui 😤 — đừng để TTS đọc lung tung, coi phụ đề là chính.",
-      "emotion": "angry"
-    },
-    {
-      "id": 7,
-      "text": "TikTok safe zone, margin dưới mười lăm phần trăm, chữ to một chút cho bản tọa mới thấy rõ.",
-      "emotion": "default"
-    },
-    {
-      "id": 8,
-      "text": "Các ngươi thích zoom nhanh hay pan chậm? Bản tọa để pipeline FFmpeg quyết định từng cảnh đấy.",
-      "emotion": "confused"
-    },
-    {
-      "id": 9,
-      "text": "Comfy chạy một lần, driving theo hook cảnh một — các cảnh sau là nhịp camera khác. Hiểu chưa?",
-      "emotion": "thinking"
-    },
-    {
-      "id": 10,
-      "text": "ElevenLabs đọc thiếu ngủ thì Bản tọa cũng ráng nghe; miễn alignment còn là ASS vẫn đẹp.",
       "emotion": "laugh"
-    },
-    {
-      "id": 11,
-      "text": "Khoảng giữa video là chỗ kể câu chuyện nhỏ: Ma Chủ không nịnh trend, chỉ chọc trend cho vui thôi.",
-      "emotion": "default"
-    },
-    {
-      "id": 12,
-      "text": "Kết: like hay không tùy các ngươi — Bản tọa chỉ cần biết pipeline chạy trọn một phút là đủ vinh dự rồi.",
-      "emotion": "thinking"
     }
   ]
 }

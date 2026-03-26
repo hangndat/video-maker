@@ -400,7 +400,7 @@ export function createSceneClip(input: CreateSceneClipInput): Promise<void> {
         durationSec,
         out: path.basename(input.outputPath),
         note:
-          'Biểu cảm mặt = từ Comfy raw (Clip lái theo HOOK/cảnh 1). emotion cảnh này chỉ đổi filter camera FFmpeg, không đổi LivePortrait.',
+          'Biểu cảm mặt = từ raw-scene-{id}.mp4 (LivePortrait + driving theo cảnh). emotion cảnh chỉ thêm filter camera FFmpeg.',
       });
       const vChain = buildSceneEmotionVideoFilters(
         input.emotion,

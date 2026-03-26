@@ -135,45 +135,80 @@ async function loadSceneAlignmentChunksFromDisk(
   return chunks;
 }
 
-async function runComfyOrPlaceholder(args: {
+/** Comfy / placeholder: một lần render cho mỗi cảnh — driving theo `scene.emotion`. */
+async function runComfyPerScenes(args: {
   paths: JobPaths;
   provider: PathProvider;
   meta: JobMeta;
   jobId: string;
   reuseRawVideo: boolean;
-  /** First scene emotion → Comfy driving clip (`assets/driving/`). */
-  drivingEmotion: string;
+  sortedScenes: ScriptScene[];
 }): Promise<void> {
-  const { paths, provider, meta, jobId, reuseRawVideo, drivingEmotion } = args;
+  const { paths, provider, meta, jobId, reuseRawVideo, sortedScenes } = args;
+
   if (reuseRawVideo) {
-    if (!fs.existsSync(paths.comfyRawVideo)) {
-      throw new Error(`reuseRawVideo: missing ${paths.comfyRawVideo}`);
+    const perSceneOk = sortedScenes.every((s) =>
+      fs.existsSync(paths.comfySceneRawVideo(s.id)),
+    );
+    if (!perSceneOk && !fs.existsSync(paths.comfyRawVideo)) {
+      throw new Error(
+        `reuseRawVideo: thiếu comfy/scenes/raw-scene-*.mp4 hoặc comfy/raw.mp4 (${paths.jobRoot})`,
+      );
     }
-    pipelineLog('comfy.skip', { reason: 'reuseRawVideo', jobId });
+    pipelineLog('comfy.skip', {
+      reason: 'reuseRawVideo',
+      jobId,
+      perSceneFiles: perSceneOk,
+      legacySingleRaw: !perSceneOk,
+    });
+    if (perSceneOk) {
+      meta.comfy = {
+        sceneRawById: Object.fromEntries(
+          sortedScenes.map((s) => [
+            String(s.id),
+            paths.comfySceneRawVideo(s.id),
+          ]),
+        ),
+        rawVideoPath: fs.existsSync(paths.comfyRawVideo)
+          ? paths.comfyRawVideo
+          : paths.comfySceneRawVideo(sortedScenes[0]!.id),
+      };
+    } else {
+      meta.comfy = { rawVideoPath: paths.comfyRawVideo };
+    }
     return;
   }
 
   const masterFace = provider.masterFace();
+  await fs.promises.mkdir(paths.scenesDir, { recursive: true });
+
   if (process.env.SKIP_COMFY === '1') {
-    let dur = 120;
-    try {
-      dur = Math.ceil(await ffprobeDurationSec(paths.audioVoice)) + 5;
-    } catch {
-      /* keep default */
-    }
-    await fs.promises.mkdir(paths.comfyDir, { recursive: true });
-    await generateColorBarsVideo(
-      paths.comfyRawVideo,
-      1080,
-      1920,
-      Math.max(30, dur),
-    );
-    meta.comfy = { rawVideoPath: paths.comfyRawVideo };
     pipelineLog('comfy.placeholder', {
       jobId,
-      drivingEmotion,
-      rawApproxSec: Math.max(30, dur),
+      mode: 'per_scene',
+      sceneCount: sortedScenes.length,
     });
+    const sceneRawById: Record<string, string> = {};
+    for (const scene of sortedScenes) {
+      const out = paths.comfySceneRawVideo(scene.id);
+      let dur = 30;
+      try {
+        dur =
+          Math.ceil(await ffprobeDurationSec(paths.sceneVoiceMp3(scene.id))) +
+          5;
+      } catch {
+        /* keep default */
+      }
+      await generateColorBarsVideo(out, 1080, 1920, Math.max(10, dur));
+      sceneRawById[String(scene.id)] = out;
+    }
+    meta.comfy = { sceneRawById, rawVideoPath: paths.comfyRawVideo };
+    if (sortedScenes[0]) {
+      await fs.promises.copyFile(
+        paths.comfySceneRawVideo(sortedScenes[0].id),
+        paths.comfyRawVideo,
+      );
+    }
     return;
   }
 
@@ -182,20 +217,46 @@ async function runComfyOrPlaceholder(args: {
       `Master face missing: ${masterFace} (place Master_Face.png under assets)`,
     );
   }
-  pipelineLog('comfy.render.start', {
+
+  const sceneRawById: Record<string, string> = {};
+  for (const scene of sortedScenes) {
+    const out = paths.comfySceneRawVideo(scene.id);
+    const subJobId = `${jobId}-s${scene.id}`;
+    pipelineLog('comfy.render.start', {
+      jobId,
+      sceneId: scene.id,
+      subJobId,
+      drivingEmotion: scene.emotion,
+      note: 'LivePortrait một lần / cảnh — driving theo emotion cảnh này.',
+    });
+    await comfyService.renderVideo({
+      jobId: subJobId,
+      masterFacePath: masterFace,
+      voiceAudioPath: paths.sceneVoiceMp3(scene.id),
+      rawVideoOutPath: out,
+      drivingEmotion: scene.emotion,
+    });
+    sceneRawById[String(scene.id)] = out;
+    pipelineLog('comfy.render.scene_done', {
+      jobId,
+      sceneId: scene.id,
+      rawRel: path.relative(paths.jobRoot, out),
+    });
+  }
+
+  meta.comfy = { sceneRawById, rawVideoPath: paths.comfyRawVideo };
+  if (sortedScenes[0]) {
+    await fs.promises.copyFile(
+      paths.comfySceneRawVideo(sortedScenes[0].id),
+      paths.comfyRawVideo,
+    );
+  }
+  pipelineLog('comfy.render.done', {
     jobId,
-    drivingEmotion,
-    note: 'Facial motion lái = một clip driving theo emotion HOOK (cảnh id nhỏ nhất), không đổi theo từng cảnh.',
+    perScene: true,
+    sceneCount: sortedScenes.length,
+    rawVideoPathLegacyMirror: paths.comfyRawVideo,
   });
-  await comfyService.renderVideo({
-    jobId,
-    masterFacePath: masterFace,
-    voiceAudioPath: paths.audioVoice,
-    rawVideoOutPath: paths.comfyRawVideo,
-    drivingEmotion,
-  });
-  meta.comfy = { rawVideoPath: paths.comfyRawVideo };
-  pipelineLog('comfy.render.done', { jobId, rawVideoPath: paths.comfyRawVideo });
 }
 
 async function assembleMultiSceneFromChunks(
@@ -214,9 +275,19 @@ async function assembleMultiSceneFromChunks(
       ffmpegMotion: sceneEmotionToFfmpegMotionLabel(s.emotion),
     })),
   });
+
+  const rawVideoForScene = (sceneId: number): string => {
+    const per = paths.comfySceneRawVideo(sceneId);
+    if (fs.existsSync(per)) return per;
+    if (fs.existsSync(paths.comfyRawVideo)) return paths.comfyRawVideo;
+    throw new Error(
+      `Thiếu video Comfy cho cảnh ${sceneId}: ${per} (hoặc legacy ${paths.comfyRawVideo})`,
+    );
+  };
+
   for (const scene of sortedScenes) {
     await createSceneClip({
-      rawVideoPath: paths.comfyRawVideo,
+      rawVideoPath: rawVideoForScene(scene.id),
       sceneAudioPath: paths.sceneVoiceMp3(scene.id),
       emotion: scene.emotion,
       outputPath: paths.sceneClipMp4(scene.id),
@@ -305,7 +376,7 @@ async function runContentPipelineInner(input: RunJobInput): Promise<RunJobResult
     sceneCount: sortedScenes.length,
     hookSceneId: sortedScenes[0]?.id,
     hookEmotion: sortedScenes[0]?.emotion,
-    comfydrivingUsesHookOnly: true,
+    comfyDrivingPerScene: true,
     scenes: sortedScenes.map((s) => ({
       id: s.id,
       emotion: s.emotion,
@@ -338,16 +409,6 @@ async function runContentPipelineInner(input: RunJobInput): Promise<RunJobResult
     audioPath: paths.audioVoice,
   });
 
-  await runComfyOrPlaceholder({
-    paths,
-    provider,
-    meta,
-    jobId: input.jobId,
-    reuseRawVideo: false,
-    drivingEmotion: sortedScenes[0]?.emotion ?? 'default',
-  });
-  await writeMeta(paths, meta);
-
   const sceneChunks: SceneAlignmentChunk[] = [];
   for (const scene of sortedScenes) {
     pipelineLog('tts.scene.start', {
@@ -378,6 +439,16 @@ async function runContentPipelineInner(input: RunJobInput): Promise<RunJobResult
       durationSec: v.actualDurationSec,
     });
   }
+
+  await runComfyPerScenes({
+    paths,
+    provider,
+    meta,
+    jobId: input.jobId,
+    reuseRawVideo: false,
+    sortedScenes,
+  });
+  await writeMeta(paths, meta);
 
   await assembleMultiSceneFromChunks(
     paths,
@@ -471,13 +542,13 @@ async function runVideoPhaseFromExistingAssetsInner(
     })),
   });
 
-  await runComfyOrPlaceholder({
+  await runComfyPerScenes({
     paths,
     provider,
     meta,
     jobId: input.jobId,
     reuseRawVideo: Boolean(input.reuseRawVideo),
-    drivingEmotion: sortedScenes[0]?.emotion ?? 'default',
+    sortedScenes,
   });
   await writeMeta(paths, meta);
 
