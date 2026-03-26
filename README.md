@@ -1,6 +1,6 @@
 # Ma Chủ — Video Maker
 
-Backend **orchestrator** sinh video dọc (TikTok-style): kịch bản **đa cảnh** (OpenAI, JSON `scenes[]` + `emotion` cho từng cảnh) → ElevenLabs (một track **full** cho Comfy + **từng cảnh** + lưu alignment) → **ComfyUI** LivePortrait → **FFmpeg**: filter theo cảnh (zoom / pan / shake), concat, đốt ASS, mix BGM. **Tuỳ chọn:** trace **Langfuse** (OpenAI + pipeline + TTS) qua OTEL khi cấu hình khóa trong `.env`.
+Backend **orchestrator** sinh video dọc (TikTok-style): kịch bản **đa cảnh** (OpenAI, JSON `scenes[]` + `emotion` cho từng cảnh) → ElevenLabs (**một** track **full** `voice.mp3` cho meta / cổng `from-video`, rồi **từng cảnh** + lưu alignment) → **ComfyUI** LivePortrait **một lần mỗi cảnh** (lip-sync theo `scene-*.mp3`, clip lái theo `emotion` **của đúng cảnh đó**) → **FFmpeg**: loop + filter theo cảnh (zoom / pan / shake), concat, đốt ASS, mix BGM. **Tuỳ chọn:** trace **Langfuse** (OpenAI + pipeline + TTS) qua OTEL khi cấu hình khóa trong `.env`.
 
 Không có UI web; gọi **HTTP API** hoặc tích hợp **n8n** (Compose có profile `full`).
 
@@ -20,20 +20,20 @@ Không có UI web; gọi **HTTP API** hoặc tích hợp **n8n** (Compose có pr
 
 ```mermaid
 flowchart LR
-  idea[Idea]
-  script[OpenAI multi-scene]
-  ttsFull[ElevenLabs full voice]
-  comfy[ComfyUI raw.mp4]
-  ttsSc[ElevenLabs per scene + alignment.json]
-  clips[FFmpeg scene clips]
-  concat[Concat clips]
+  idea[Idea / preset scenes]
+  script[Kịch bản scenes]
+  ttsFull[ElevenLabs full → voice.mp3]
+  ttsSc[ElevenLabs per scene + alignment]
+  comfy[ComfyUI × N → raw-scene-*.mp4]
+  clips[FFmpeg clip-*.mp4]
+  concat[concat.mp4]
   ass[ASS + BGM]
   out[final/output.mp4]
 
   idea --> script
   script --> ttsFull
-  ttsFull --> comfy
-  script --> ttsSc
+  ttsFull --> ttsSc
+  ttsSc --> comfy
   comfy --> clips
   ttsSc --> clips
   clips --> concat
@@ -41,8 +41,8 @@ flowchart LR
   ass --> out
 ```
 
-- **`SKIP_COMFY=1`**: bỏ Comfy, dùng video placeholder nhưng vẫn OpenAI + ElevenLabs + bước cắt cảnh / concat / ASS như trên.
-- **Tái dùng (không gọi lại OpenAI / ElevenLabs)**: sau **một lần** `POST /jobs/render`, dùng `POST /jobs/render/from-video` (mục [API](#api-http)). Cần đủ file `audio/*` kèm `scene-*.alignment.json`.
+- **`SKIP_COMFY=1`**: bỏ Comfy thật; sinh placeholder **từng cảnh** (`raw-scene-*.mp4`), vẫn OpenAI (nếu có `idea`) + ElevenLabs + FFmpeg như trên. `comfy/raw.mp4` là bản mirror cảnh đầu (tương thích layout cũ).
+- **Tái dùng (không gọi lại OpenAI / ElevenLabs)**: sau **một lần** `POST /jobs/render`, dùng `POST /jobs/render/from-video` (mục [API](#api-http)). Cần đủ `audio/*` kèm `scene-*.alignment.json` và `voice.mp3`.
 
 Chi tiết Comfy, model, macOS: [**docs/comfy-macos.md**](docs/comfy-macos.md).
 
@@ -116,7 +116,7 @@ Bản đầy đủ có comment trong [`.env.example`](.env.example). Bảng rút
 | `COMFY_OOM_MAX_RETRIES` | Số lần retry khi Comfy báo OOM (mặc định `3`) |
 | `COMFY_OOM_RETRY_SEC` | Chờ giữa các lần retry OOM, giây (mặc định `30`) |
 | `COMFY_WS_TIMEOUT_MS` | Timeout chờ job Comfy qua WebSocket (mặc định `3600000`) |
-| `COMFY_DRIVING_VIDEO` | **Ghi đè** emotion: đường tuyệt đối tới mp4 lái. Nếu không set: file lấy từ `DATA_ROOT/assets/driving/` theo emotion **cảnh đầu** (xem `src/config/driving-videos.ts`). Fallback: `DATA_ROOT/assets/driving_reference.mp4` |
+| `COMFY_DRIVING_VIDEO` | **Ghi đè** toàn pipeline: mọi lần Comfy dùng **một** file mp4 lái cố định (bỏ map theo `emotion`). Nếu **không** set: mỗi cảnh chọn file trong `DATA_ROOT/assets/driving/` theo **`emotion` của cảnh đó** (xem `src/config/driving-videos.ts`). Fallback thiếu file: `DATA_ROOT/assets/driving_reference.mp4` |
 | `WORKFLOW_PATH` | Tuỳ chọn: JSON workflow API khác mặc định ([`workflows/workflow_api.json`](workflows/workflow_api.json)) |
 | `SKIP_COMFY` | `1` = không gọi Comfy (placeholder video) |
 | `BGM_PATH` | Nhạc nền (đối với `DATA_ROOT` hoặc tuyệt đối) |
@@ -134,7 +134,7 @@ Bản đầy đủ có comment trong [`.env.example`](.env.example). Bảng rút
 | `LANGFUSE_TRACING_ENABLED` | `0` = tắt tracing dù đã set key |
 | `LANGFUSE_OTEL_EXPORT_MODE` | `immediate` = flush span nhanh (hữu ích khi debug) |
 | `LANGFUSE_BASE_URL` | Host Langfuse self-host (thường khớp UI, vd. `http://127.0.0.1:3030`) — xem `.env.example` |
-| `LANGFUSE_ELEVENLABS_USD_PER_1K_CHARS` | Ước lượng chi phí TTS trên Langfuse (USD / 1000 ký tự) |
+| `LANGFUSE_ELEVENLABS_USD_PER_1K_CHARS` | Ước lượng chi phí TTS trên Langfuse (USD / 1000 ký tự). Alias: `ELEVENLABS_LANGFUSE_USD_PER_1K_CHARS` |
 | `LANGFUSE_LOG_TTS_TEXT` | `1` = gửi toàn bộ chuỗi TTS vào trace (mặc định chỉ đếm ký tự) |
 
 **Quan trọng:** File master / voice / driving phải nằm trong **`input` thật** của process Comfy. Nếu không set `COMFY_*` đường dẫn, app thử `../ComfyUI`, `~/SideProject/ComfyUI`, `~/ComfyUI`.
@@ -155,14 +155,15 @@ shared_data/                    # hoặc DATA_ROOT khi override
     {jobId}/
       meta.json                 # script.scenes[], voice summary, comfy paths
       audio/
-        voice.mp3               # giọng full (lip-sync Comfy)
+        voice.mp3               # giọng full — meta / from-video; Comfy lip-sync dùng scene-*.mp3
         scene-{id}.mp3          # giọng từng cảnh (mux sau ghép)
         scene-{id}.alignment.json  # alignment ElevenLabs (cho ASS + /render/from-video)
       subtitles/burn.ass
       comfy/
-        raw.mp4                 # output Comfy
+        raw.mp4                 # mirror cảnh đầu (tương thích); luồng chính dùng raw-scene-*
         scenes/
-          clip-{id}.mp4         # từng cảnh sau filter emotion
+          raw-scene-{id}.mp4    # output Comfy từng cảnh (LivePortrait + driving theo emotion cảnh)
+          clip-{id}.mp4         # sau loop + filter FFmpeg theo emotion
           concat.mp4            # nối clip trước bước ASS
           concat.txt            # danh sách file cho demuxer FFmpeg
       final/output.mp4          # sản phẩm cuối
@@ -208,7 +209,7 @@ Body JSON (UTF-8). Phải có **`idea`** (gọi OpenAI) **hoặc** **`scenes`** 
 }
 ```
 
-OpenAI (khi dùng `idea`) trả `scenes[]` cùng schema. Mood: `laugh` | `angry` | `confused` | `thinking` | `default` (driving **cảnh đầu** / Comfy), hoặc legacy: `zoom_in_fast` | `pan_left` | `camera_shake`.
+OpenAI (khi dùng `idea`) trả `scenes[]` cùng schema. Mood: `laugh` | `angry` | `confused` | `thinking` | `default` (mỗi giá trị chọn clip lái Comfy **và** preset FFmpeg cho **đúng cảnh đó`), hoặc legacy: `zoom_in_fast` | `pan_left` | `camera_shake`.
 
 ### `POST /jobs/render/from-video`
 
@@ -222,8 +223,8 @@ Dùng khi đã chạy **ít nhất một lần** `/jobs/render` với cùng `job
 }
 ```
 
-- **`reuseRawVideo`**: `false` (mặc định) — chạy lại Comfy (hoặc placeholder nếu `SKIP_COMFY=1`) với `audio/voice.mp3` hiện có, rồi cắt cảnh + concat + ASS.
-- **`reuseRawVideo`**: `true` — **không** gọi Comfy; bắt buộc đã có `comfy/raw.mp4`. Hữu ích khi chỉ thử lại hiệu ứng FFmpeg / phụ đề.
+- **`reuseRawVideo`**: `false` (mặc định) — chạy lại Comfy (hoặc placeholder nếu `SKIP_COMFY=1`): **mỗi cảnh** một job Comfy với `audio/scene-{id}.mp3` và driving theo `meta.script.scenes`, rồi FFmpeg + concat + ASS.
+- **`reuseRawVideo`**: `true` — **không** gọi Comfy. Cần đủ `comfy/scenes/raw-scene-{id}.mp4` **hoặc** ít nhất `comfy/raw.mp4` (legacy: một file dùng chung khi thiếu từng `raw-scene-*`). Hữu ích khi chỉ chỉnh FFmpeg / phụ đề.
 
 Lỗi thiếu `scene-*.alignment.json` → `400` (chạy lại full `/jobs/render` một lần trên version hiện tại). Không có `meta.json` → `404`.
 
@@ -278,7 +279,7 @@ Lỗi validation body → `400`. Lỗi Comfy workflow → `502`. OOM Comfy → `
 | `npm run verify:driving` | Kiểm tra map emotion → `assets/driving/*.mp4` (không tốn API; cùng logic Comfy) |
 | `npm run phase3:preset` | Phase 3: preset **~15s**, [`fixtures/phase3-preset-scenes.json`](fixtures/phase3-preset-scenes.json) (**không OpenAI**). Dài: `PHASE3_FIXTURE=fixtures/phase3-preset-scenes-long.json`. Log: `PIPELINE_LOG=1` |
 | `npm run install:comfy-nodes` | Clone LivePortraitKJ + VHS + pip (cần `COMFY_ROOT`) |
-| `npm run comfy:render` | Chỉ Comfy (không OpenAI / ElevenLabs / FFmpeg): `npm run comfy:render -- <jobId>` hoặc `COMFY_ONLY_JOB_ID=...`. Cần `audio/voice.mp3`; tuỳ chọn `COMFY_TEST_EMOTION` (ghi đè emotion hook). Không đặt `SKIP_COMFY=1` |
+| `npm run comfy:render` | **Debug:** một lần Comfy → `comfy/raw.mp4` với `audio/voice.mp3` + driving theo emotion **cảnh đầu** trong `meta` (hoặc `COMFY_TEST_EMOTION`). **Không** sinh `raw-scene-*.mp4` như pipeline chính. `npm run comfy:render -- <jobId>`. Không đặt `SKIP_COMFY=1` |
 | `npm run langfuse:seed` | Sinh seed bash cho Docker Langfuse (`scripts/gen-langfuse-seed.sh`) |
 | `npm run langfuse:env` | Ghi `.env.langfuse` an toàn từ seed (khuyến nghị thay `> .env.langfuse`) |
 

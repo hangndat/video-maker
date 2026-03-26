@@ -7,11 +7,13 @@ Orchestrator trong repo **không** đóng gói ComfyUI. Trên macOS, chạy Comf
 1. Clone [ComfyUI](https://github.com/comfyanonymous/ComfyUI) (hoặc làm theo README upstream).
 2. **Python:** bản upstream hiện cần **Python ≥ 3.10** (thực tế hay dùng **3.12**). Python 3.9 kèm macOS thường **không** cài được `requirements.txt`. Cài Homebrew Python rồi tạo venv, ví dụ:
    `brew install python@3.12` → `cd ComfyUI && /opt/homebrew/bin/python3.12 -m venv venv && ./venv/bin/pip install -r requirements.txt`
-3. Cài stack **LivePortrait + Video Helper Suite** (custom nodes + pip phụ thuộc):
+3. Cài stack **LivePortrait + Video Helper Suite** (chạy **từ thư mục repo video-maker**, không phải trong ComfyUI):
 
 ```bash
+cd /đường/dẫn/video-maker
 export COMFY_ROOT=/đường/dẫn/ComfyUI   # mặc định script: ~/SideProject/ComfyUI
-./scripts/install-comfy-liveportrait.sh
+npm run install:comfy-nodes
+# tương đương: bash scripts/install-comfy-liveportrait.sh (cần COMFY_ROOT)
 ```
 
 4. Chạy server (giữ terminal mở):
@@ -21,6 +23,8 @@ export COMFY_ROOT=/đường/dẫn/ComfyUI   # mặc định script: ~/SideProje
 5. Mở `http://127.0.0.1:8188` (GUI). Kiểm tra từ video-maker: `npm run check:comfy`.
 
 Giữ terminal Comfy mở khi chạy `npm run dev` hoặc pipeline render.
+
+Một job đa cảnh gọi Comfy **tuần tự** (trong app `p-queue` concurrency 1) **một lần / cảnh**. Với video dài (nhiều cảnh), cân nhắc tăng `COMFY_WS_TIMEOUT_MS` so với mặc định 1 giờ (tổng thời gian ≈ N × thời gian một pass).
 
 ## 2. Graph API (LivePortrait Kijai + VHS)
 
@@ -38,9 +42,9 @@ File: [`workflows/workflow_api.json`](../workflows/workflow_api.json). Các `cla
 **Quan trọng — hai nguồn khác nhau:**
 
 - **Video lái (`driving_reference`)**: LivePortrait Kijai cần **chuỗi khung hình mặt chuyển động** (file mp4 đặt trong input). Đây **không** phải file TTS.
-- **Giọng TTS (`*_voice.mp3`)**: trong graph Comfy vẫn đi vào `LoadAudio` / combine để **khớp môi** trên `raw.mp4`. **Sau đó** app Node còn bước đa cảnh: ghép giọng **theo từng cảnh** (`scene-*.mp3`) + FFmpeg; track âm thanh **cuối cùng** trong `final/output.mp4` là từ các cảnh đó (xem README pipeline).
+- **Giọng TTS (`*_voice.mp3`)**: trong graph Comfy, file này là **đúng đoạn thoại** của **cảnh đang render** (app copy từ `audio/scene-{id}.mp3` với `subJobId` tương ứng). **Sau đó** pipeline ghép timeline + **đốt ASS** từ alignment từng cảnh; **âm thanh cuối** trong `final/output.mp4` là chuỗi `scene-*.mp3` (không dùng lại track âm trong file Comfy).
 
-**Chọn clip lái theo mood (mặc định):** đặt nhiều mp4 trong `shared_data/assets/driving/` và để **emotion cảnh đầu** trong `meta.json` quyết định file (vd. `laugh` → `laugh_mocking.mp4`). Bảng đầy đủ và hành vi ghi đè `COMFY_DRIVING_VIDEO` xem [**docs/pipeline.md** §3](pipeline.md#3-emotion--hai-vai-trò-khác-nhau).
+**Chọn clip lái theo mood (mặc định):** đặt mp4 trong `shared_data/assets/driving/`. **Mỗi cảnh** Comfy chọn file theo **`emotion` của cảnh đó** (vd. `laugh` → `laugh_mocking.mp4`). Bảng và `COMFY_DRIVING_VIDEO` xem [**docs/pipeline.md** §3](pipeline.md#3-emotion--hai-vai-trò-khác-nhau).
 
 **Fallback:** `shared_data/assets/driving_reference.mp4` hoặc **`COMFY_DRIVING_VIDEO`** (đường dẫn tuyệt đối) — khi set biến này, app **bỏ qua** map emotion. Độ dài clip nên gần thời lượng voice để giảm lệch (tinh chỉnh thêm `frame_rate` / workflow nếu cần).
 
@@ -66,7 +70,7 @@ Model LivePortrait tải lần đầu vào `ComfyUI/models/liveportrait` (HF). *
 - `COMFY_INPUT_DIR` / `COMFY_OUTPUT_DIR` — **đường dẫn tuyệt đối** tới `input` / `output` của ComfyUI.
 - **`COMFY_WS_TIMEOUT_MS`** — timeout chờ job qua WebSocket (mặc định 1h); tăng nếu `voice.mp3` dài hoặc máy chậm.
 - **`COMFY_OOM_MAX_RETRIES`** / **`COMFY_OOM_RETRY_SEC`** — retry khi Comfy báo hết VRAM (mặc định 3 lần, cách nhau 30s).
-- **Driving video:** ưu tiên **`COMFY_DRIVING_VIDEO`** (ghi đè); không set thì map `DATA_ROOT/assets/driving/*.mp4` theo emotion hook + fallback `driving_reference.mp4` — [pipeline.md §3](pipeline.md#31-comfy--liveportrait--chỉ-cảnh-đầu-hook).
+- **Driving video:** ưu tiên **`COMFY_DRIVING_VIDEO`** (một file cố định cho mọi lần Comfy); không set thì mỗi cảnh map `DATA_ROOT/assets/driving/*.mp4` theo emotion cảnh + fallback `driving_reference.mp4` — [pipeline.md §3.1](pipeline.md#31-comfy--liveportrait--từng-cảnh).
 
 App copy vào input: `*_master.*`, `*_voice.mp3`, `*_driving.mp4`. Các file **phải** nằm trong đúng thư mục `input` mà **process Comfy** đang dùng (mặc định `ComfyUI/input` nếu bạn không truyền `--input-directory`). Chỉ set `COMFY_INPUT_DIR` trỏ vào `shared_data/comfy_input` **mà Comfy vẫn chạy mặc định** sẽ lỗi `Invalid … file`: hai bên không tự đồng bộ. Cách đúng: hoặc `.env` dùng đường dẫn tuyệt đối tới `…/ComfyUI/input` và `…/ComfyUI/output`, hoặc bật Comfy với `python main.py --input-directory …/shared_data/comfy_input --output-directory …/shared_data/comfy_output` trùng `.env`.
 
@@ -85,7 +89,7 @@ SKIP_COMFY=1
 
 Pipeline bỏ bước Comfy (placeholder video), vẫn chạy script / ElevenLabs / cắt cảnh FFmpeg / concat / ASS.
 
-**Chỉ chạy lại từ Comfy / FFmpeg** (không OpenAI, không ElevenLabs): dùng `POST /jobs/render/from-video` sau khi đã có job đủ `audio/*` và `scene-*.alignment.json` — chi tiết README gốc.
+**Chỉ chạy lại từ Comfy / FFmpeg** (không OpenAI, không ElevenLabs): `POST /jobs/render/from-video` khi đã có job đủ `voice.mp3`, `audio/scene-*`, `scene-*.alignment.json` — pipeline sẽ chạy **N lần** Comfy (mặc định) hoặc tái dùng `raw-scene-*` / `raw.mp4` nếu `reuseRawVideo: true`. Chi tiết README gốc.
 
 ## 4. Kiểm tra Comfy có sống
 

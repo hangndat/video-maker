@@ -240,7 +240,7 @@ export type ComfyRenderParams = {
   voiceAudioPath: string;
   rawVideoOutPath: string;
   /**
-   * Scene `emotion` from kịch bản (cảnh đầu / hook chọn clip driving cho Comfy).
+   * Scene `emotion` — chọn clip driving cho **đúng** lần Comfy này (pipeline gọi N lần, mỗi cảnh một emotion).
    * Map file trong `DATA_ROOT/assets/driving/` (xem `src/config/driving-videos.ts`), trừ khi set `COMFY_DRIVING_VIDEO`.
    */
   drivingEmotion: string;

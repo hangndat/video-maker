@@ -3,7 +3,7 @@
 | Tài liệu | Mục đích |
 |----------|----------|
 | [README.md](../README.md) ở gốc repo | Cài đặt, biến môi trường, API (`/jobs/render`, `/jobs/render/from-video`), Docker, workflow Comfy (tóm tắt) |
-| [**pipeline.md**](pipeline.md) | Luồng chi tiết đa cảnh, bảng `emotion` → driving / FFmpeg, artifact `audio/*`, reuse, test `verify:driving`, liên kết mã nguồn |
+| [**pipeline.md**](pipeline.md) | Luồng chi tiết: Comfy **mỗi cảnh** (`raw-scene-*`), `emotion` → driving / FFmpeg, artifact, `from-video`, `verify:driving`, liên kết mã |
 | [**dev-phases.md**](dev-phases.md) | Phase dev ($0 → trả phí): Definition of done + bảng test T0–T4, cổng chuyển phase |
 | [comfy-macos.md](comfy-macos.md) | ComfyUI native macOS, LivePortrait KJ, VHS, model, symlink / `COMFY_INPUT_DIR` / `COMFY_OUTPUT_DIR`, lỗi thường gặp |
 | [docker-compose.langfuse.yml](../docker-compose.langfuse.yml) | Langfuse self-host; kết hợp với `LANGFUSE_*` trong `.env` app (`npm run langfuse:env`) |
