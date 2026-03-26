@@ -6,14 +6,26 @@ import {
 } from '../services/pipeline.service.js';
 import { ComfyOutOfMemoryError, ComfyWorkflowError } from '../services/comfy.service.js';
 import { scriptSceneSchema } from '../types/script-schema.js';
+import {
+  characterProfileV1Schema,
+  environmentContextV1Schema,
+} from '../types/character-profile-schema.js';
 import { runWithLogContext } from '../shared/log-context.js';
 
-const renderBody = z
+export const jobsRenderBodySchema = z
   .object({
     jobId: z.string().min(1).max(200),
     idea: z.string().min(1).max(8000).optional(),
     scenes: z.array(scriptSceneSchema).min(1).optional(),
     bgmPath: z.string().optional(),
+    characterProfile: characterProfileV1Schema.optional(),
+    environment: environmentContextV1Schema.optional(),
+    visual: z
+      .object({
+        chainComfyFrames: z.boolean().optional(),
+        ipAdapterReferencePath: z.string().optional(),
+      })
+      .optional(),
   })
   .refine(
     (d) => Boolean(d.idea?.trim()) || Boolean(d.scenes?.length),
@@ -33,7 +45,7 @@ const renderFromVideoBody = z.object({
 export const jobsRouter = Router();
 
 jobsRouter.post('/render', async (req, res) => {
-  const parsed = renderBody.safeParse(req.body);
+  const parsed = jobsRenderBodySchema.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.flatten() });
     return;

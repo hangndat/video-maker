@@ -23,6 +23,8 @@ export type JobPaths = {
   finalDir: string;
   finalOutput: string;
   metaFile: string;
+  declarativeDir: string;
+  declarativeSnapshot: string;
 };
 
 function ensureDataRoot(): string {
@@ -45,6 +47,7 @@ export function createPathProvider(dataRoot = ensureDataRoot()) {
     const comfyDir = path.join(jobRoot, 'comfy');
     const scenesDir = path.join(comfyDir, 'scenes');
     const finalDir = path.join(jobRoot, 'final');
+    const declarativeDir = path.join(jobRoot, 'declarative');
     return {
       jobRoot,
       inputDir: path.join(jobRoot, 'input'),
@@ -68,6 +71,8 @@ export function createPathProvider(dataRoot = ensureDataRoot()) {
       finalDir,
       finalOutput: path.join(finalDir, 'output.mp4'),
       metaFile: path.join(jobRoot, 'meta.json'),
+      declarativeDir,
+      declarativeSnapshot: path.join(declarativeDir, 'snapshot.json'),
     };
   };
 

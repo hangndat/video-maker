@@ -21,6 +21,8 @@ export const scriptSceneSchema = z.object({
   id: z.number().int().positive(),
   text: z.string().min(1),
   emotion: sceneEmotionSchema,
+  /** Ghi chép môi trường theo cảnh (JSON mở); chưa map tự động vào Comfy. */
+  environment: z.record(z.string(), z.unknown()).optional(),
 });
 
 export type ScriptScene = z.infer<typeof scriptSceneSchema>;

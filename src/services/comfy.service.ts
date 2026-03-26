@@ -8,6 +8,8 @@ import {
   COMFY_NODE_LOAD_DRIVING_VIDEO,
   COMFY_NODE_LOAD_AUDIO,
   COMFY_NODE_VIDEO_COMBINE,
+  comfyNodeIpAdapterImageId,
+  comfyNodeIpAdapterImageInputKey,
 } from '../config/comfy-workflow.js';
 import { resolveComfyDrivingSourcePath } from '../config/driving-videos.js';
 import { pipelineLog } from '../shared/pipeline-log.js';
@@ -244,6 +246,8 @@ export type ComfyRenderParams = {
    * Map file trong `DATA_ROOT/assets/driving/` (xem `src/config/driving-videos.ts`), trừ khi set `COMFY_DRIVING_VIDEO`.
    */
   drivingEmotion: string;
+  /** Khi `COMFY_NODE_IP_ADAPTER_IMAGE` trỏ node LoadImage (API id), copy file này vào Comfy input. */
+  ipAdapterReferencePath?: string;
 };
 
 export class ComfyService {
@@ -283,8 +287,14 @@ export class ComfyService {
   }
 
   private async renderVideoOnce(params: ComfyRenderParams): Promise<void> {
-    const { jobId, masterFacePath, voiceAudioPath, rawVideoOutPath, drivingEmotion } =
-      params;
+    const {
+      jobId,
+      masterFacePath,
+      voiceAudioPath,
+      rawVideoOutPath,
+      drivingEmotion,
+      ipAdapterReferencePath,
+    } = params;
     if (!fs.existsSync(masterFacePath)) {
       throw new Error(`Master face not found: ${masterFacePath}`);
     }
@@ -334,6 +344,36 @@ export class ComfyService {
     // workflow_api.json node "7" — VHS_LoadVideoFFmpeg `video` = basename in Comfy input/
     loadVid.inputs.video = drivingName;
     loadAud.inputs.audio = audioName;
+
+    const ipAdapterId = comfyNodeIpAdapterImageId();
+    if (
+      ipAdapterId &&
+      ipAdapterReferencePath &&
+      fs.existsSync(ipAdapterReferencePath)
+    ) {
+      const ipExt = path.extname(ipAdapterReferencePath) || '.png';
+      const ipName = `${jobId}_ipadapter${ipExt}`;
+      await fs.promises.copyFile(
+        ipAdapterReferencePath,
+        path.join(inputDir, ipName),
+      );
+      const ipNode = prompt[ipAdapterId] as
+        | { inputs?: Record<string, unknown> }
+        | undefined;
+      if (!ipNode?.inputs) {
+        throw new Error(
+          `Workflow has no node ${ipAdapterId} (COMFY_NODE_IP_ADAPTER_IMAGE)`,
+        );
+      }
+      const inputKey = comfyNodeIpAdapterImageInputKey();
+      ipNode.inputs[inputKey] = ipName;
+      pipelineLog('comfy.ip_adapter', {
+        jobId,
+        nodeId: ipAdapterId,
+        inputKey,
+        basename: ipName,
+      });
+    }
 
     const clientId = randomUUID();
     const ws = new WebSocket(wsUrlForClient(clientId));

@@ -619,6 +619,29 @@ export async function generateColorBarsVideo(
   ]);
 }
 
+/** Một khung gần cuối MP4 — dùng làm ảnh nguồn LivePortrait cho cảnh kế (chain frame). */
+export async function extractLastFramePng(
+  videoPath: string,
+  outPngPath: string,
+): Promise<void> {
+  if (!fs.existsSync(videoPath)) {
+    throw new Error(`extractLastFramePng: missing video ${videoPath}`);
+  }
+  await fs.promises.mkdir(path.dirname(outPngPath), { recursive: true });
+  await runFfmpeg([
+    '-y',
+    '-sseof',
+    '-0.125',
+    '-i',
+    videoPath,
+    '-frames:v',
+    '1',
+    '-q:v',
+    '2',
+    outPngPath,
+  ]);
+}
+
 export async function generateSineMp3(
   outPath: string,
   durationSec: number,

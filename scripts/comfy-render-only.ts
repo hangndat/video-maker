@@ -16,9 +16,11 @@ import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { comfyNodeIpAdapterImageId } from '../src/config/comfy-workflow.js';
 import { resolveComfyDrivingSourcePath } from '../src/config/driving-videos.js';
 import { createPathProvider } from '../src/shared/path-provider.js';
 import { comfyService } from '../src/services/comfy.service.js';
+import type { JobMeta } from '../src/types/job-meta.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -55,6 +57,12 @@ async function main(): Promise<void> {
   const paths = provider.jobPaths(jobId);
   const masterFace = provider.masterFace();
 
+  function resolveDataPath(relOrAbs: string): string {
+    return path.isAbsolute(relOrAbs)
+      ? relOrAbs
+      : path.join(provider.dataRoot, relOrAbs);
+  }
+
   if (!fs.existsSync(paths.audioVoice)) {
     throw new Error(`Missing ${paths.audioVoice} (cần job đã có voice.mp3)`);
   }
@@ -62,19 +70,33 @@ async function main(): Promise<void> {
     throw new Error(`Missing ${masterFace}`);
   }
 
+  let metaFromDisk: JobMeta | null = null;
   let drivingEmotion = process.env.COMFY_TEST_EMOTION?.trim();
-  if (!drivingEmotion && fs.existsSync(paths.metaFile)) {
-    const rawMeta = JSON.parse(
+  if (fs.existsSync(paths.metaFile)) {
+    metaFromDisk = JSON.parse(
       await fs.promises.readFile(paths.metaFile, 'utf8'),
-    ) as {
-      script?: { scenes?: { id: number; emotion?: string }[] };
-    };
-    const sorted = [...(rawMeta.script?.scenes ?? [])].sort(
-      (a, b) => a.id - b.id,
-    );
-    drivingEmotion = sorted[0]?.emotion ?? 'default';
+    ) as JobMeta;
+    if (!drivingEmotion) {
+      const sorted = [...(metaFromDisk.script?.scenes ?? [])].sort(
+        (a, b) => a.id - b.id,
+      );
+      drivingEmotion = sorted[0]?.emotion ?? 'default';
+    }
   }
   if (!drivingEmotion) drivingEmotion = 'default';
+
+  let ipAdapterReferencePath: string | undefined;
+  if (comfyNodeIpAdapterImageId()) {
+    const fromMeta = metaFromDisk?.visual?.ipAdapterReferencePath?.trim();
+    const fromEnv = process.env.COMFY_IP_ADAPTER_REFERENCE_PATH?.trim();
+    const raw = fromMeta || fromEnv;
+    if (raw) {
+      const p = resolveDataPath(raw);
+      if (fs.existsSync(p)) ipAdapterReferencePath = p;
+    } else if (fs.existsSync(masterFace)) {
+      ipAdapterReferencePath = masterFace;
+    }
+  }
 
   const dataRoot = path.resolve(
     process.env.DATA_ROOT?.trim() || path.join(repoRoot, 'shared_data'),
@@ -104,6 +126,7 @@ async function main(): Promise<void> {
     voiceAudioPath: paths.audioVoice,
     rawVideoOutPath: paths.comfyRawVideo,
     drivingEmotion,
+    ipAdapterReferencePath,
   });
   console.log('Done:', paths.comfyRawVideo);
 }

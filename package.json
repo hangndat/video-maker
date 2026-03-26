@@ -6,13 +6,16 @@
   "scripts": {
     "dev": "tsx watch src/app.ts",
     "build": "tsc",
+    "test": "tsx --test src/**/*.test.ts",
     "start": "node dist/src/app.js",
     "smoke:video": "tsx scripts/smoke-video.ts",
     "smoke:multiscene": "tsx scripts/smoke-multiscene.ts",
+    "smoke:chain": "tsx scripts/smoke-chain.ts",
     "check:comfy": "tsx scripts/check-comfy.ts",
     "verify:driving": "tsx scripts/verify-driving-map.ts",
     "comfy:render": "tsx scripts/comfy-render-only.ts",
     "phase3:preset": "tsx scripts/phase3-render-preset.ts",
+    "render:consistency": "tsx scripts/full-consistency-render.ts",
     "install:comfy-nodes": "bash scripts/install-comfy-liveportrait.sh",
     "langfuse:seed": "bash scripts/gen-langfuse-seed.sh",
     "langfuse:env": "node scripts/write-langfuse-env.mjs"

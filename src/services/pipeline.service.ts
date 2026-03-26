@@ -11,7 +11,9 @@ import {
   type JobPaths,
   type PathProvider,
 } from '../shared/path-provider.js';
+import { mergeEnvironmentContext } from '../shared/merge-environment.js';
 import { ffprobeDurationSec } from '../shared/ffprobe.js';
+import { comfyNodeIpAdapterImageId } from '../config/comfy-workflow.js';
 import type { JobMeta } from '../types/job-meta.js';
 import type { CharacterAlignment } from '../types/elevenlabs.js';
 import { sceneAlignmentArtifactSchema } from '../types/scene-alignment-artifact.js';
@@ -27,6 +29,7 @@ import {
   assembleFinalVideoPremuxed,
   concatSceneClips,
   createSceneClip,
+  extractLastFramePng,
   generateColorBarsVideo,
   mergeSceneAlignments,
   sceneEmotionToFfmpegMotionLabel,
@@ -44,6 +47,9 @@ export type RunJobInput = {
   /** Kịch bản gửi sẵn: bỏ OpenAI, vẫn chạy ElevenLabs + Comfy + FFmpeg. */
   scenes?: ScriptScene[];
   bgmPath?: string;
+  characterProfile?: JobMeta['characterProfile'];
+  environment?: JobMeta['environment'];
+  visual?: JobMeta['visual'];
 };
 
 export type RunVideoPhaseInput = {
@@ -68,6 +74,62 @@ async function writeMeta(
     JSON.stringify(meta, null, 2),
     'utf8',
   );
+}
+
+/** Snapshot audit: character khóa + environment merge theo từng cảnh. */
+async function writeDeclarativeSnapshot(
+  paths: JobPaths,
+  meta: JobMeta,
+): Promise<void> {
+  const sorted = [...meta.script.scenes].sort((a, b) => a.id - b.id);
+  const payload = {
+    schema_version: 1,
+    generated_at: new Date().toISOString(),
+    jobId: meta.jobId,
+    characterProfile: meta.characterProfile ?? null,
+    environment_defaults: meta.environment ?? null,
+    scenes: sorted.map((s) => ({
+      id: s.id,
+      environment_merged: mergeEnvironmentContext(
+        meta.environment as Record<string, unknown> | undefined,
+        s.environment,
+      ),
+    })),
+  };
+  await fs.promises.mkdir(paths.declarativeDir, { recursive: true });
+  await fs.promises.writeFile(
+    paths.declarativeSnapshot,
+    JSON.stringify(payload, null, 2),
+    'utf8',
+  );
+}
+
+function chainComfyFramesEnabled(meta: JobMeta): boolean {
+  return (
+    meta.visual?.chainComfyFrames === true ||
+    process.env.COMFY_CHAIN_FRAMES === '1'
+  );
+}
+
+function resolveDataPath(dataRoot: string, relOrAbs: string): string {
+  return path.isAbsolute(relOrAbs) ? relOrAbs : path.join(dataRoot, relOrAbs);
+}
+
+/** Ảnh copy vào node IP-Adapter khi `COMFY_NODE_IP_ADAPTER_IMAGE` đã cấu hình. */
+function resolveIpAdapterReferencePathForRender(
+  provider: PathProvider,
+  meta: JobMeta,
+  masterFacePath: string,
+): string | undefined {
+  if (!comfyNodeIpAdapterImageId()) return undefined;
+  const fromMeta = meta.visual?.ipAdapterReferencePath?.trim();
+  const fromEnv = process.env.COMFY_IP_ADAPTER_REFERENCE_PATH?.trim();
+  const raw = fromMeta || fromEnv;
+  if (raw) {
+    const p = resolveDataPath(provider.dataRoot, raw);
+    return fs.existsSync(p) ? p : undefined;
+  }
+  return fs.existsSync(masterFacePath) ? masterFacePath : undefined;
 }
 
 function resolveBgm(
@@ -179,7 +241,7 @@ async function runComfyPerScenes(args: {
     return;
   }
 
-  const masterFace = provider.masterFace();
+  const masterFaceDefault = provider.masterFace();
   await fs.promises.mkdir(paths.scenesDir, { recursive: true });
 
   if (process.env.SKIP_COMFY === '1') {
@@ -212,29 +274,43 @@ async function runComfyPerScenes(args: {
     return;
   }
 
-  if (!fs.existsSync(masterFace)) {
+  if (!fs.existsSync(masterFaceDefault)) {
     throw new Error(
-      `Master face missing: ${masterFace} (place Master_Face.png under assets)`,
+      `Master face missing: ${masterFaceDefault} (place Master_Face.png under assets)`,
     );
   }
 
+  const chainOn = chainComfyFramesEnabled(meta);
+  let masterFacePath = masterFaceDefault;
   const sceneRawById: Record<string, string> = {};
-  for (const scene of sortedScenes) {
+  for (let i = 0; i < sortedScenes.length; i++) {
+    const scene = sortedScenes[i]!;
+    if (!chainOn) {
+      masterFacePath = masterFaceDefault;
+    }
     const out = paths.comfySceneRawVideo(scene.id);
     const subJobId = `${jobId}-s${scene.id}`;
+    const ipRef = resolveIpAdapterReferencePathForRender(
+      provider,
+      meta,
+      masterFacePath,
+    );
     pipelineLog('comfy.render.start', {
       jobId,
       sceneId: scene.id,
       subJobId,
       drivingEmotion: scene.emotion,
+      chainComfyFrames: chainOn,
+      masterFaceRel: path.relative(paths.jobRoot, masterFacePath),
       note: 'LivePortrait một lần / cảnh — driving theo emotion cảnh này.',
     });
     await comfyService.renderVideo({
       jobId: subJobId,
-      masterFacePath: masterFace,
+      masterFacePath,
       voiceAudioPath: paths.sceneVoiceMp3(scene.id),
       rawVideoOutPath: out,
       drivingEmotion: scene.emotion,
+      ipAdapterReferencePath: ipRef,
     });
     sceneRawById[String(scene.id)] = out;
     pipelineLog('comfy.render.scene_done', {
@@ -242,6 +318,21 @@ async function runComfyPerScenes(args: {
       sceneId: scene.id,
       rawRel: path.relative(paths.jobRoot, out),
     });
+    if (chainOn && i < sortedScenes.length - 1) {
+      const nextScene = sortedScenes[i + 1]!;
+      const chainPng = path.join(
+        paths.scenesDir,
+        `chain-master-${nextScene.id}.png`,
+      );
+      await extractLastFramePng(out, chainPng);
+      masterFacePath = chainPng;
+      pipelineLog('comfy.chain_frame', {
+        jobId,
+        fromSceneId: scene.id,
+        nextSceneId: nextScene.id,
+        chainPngRel: path.relative(paths.jobRoot, chainPng),
+      });
+    }
   }
 
   meta.comfy = { sceneRawById, rawVideoPath: paths.comfyRawVideo };
@@ -329,6 +420,9 @@ async function runContentPipelineInner(input: RunJobInput): Promise<RunJobResult
       input.idea?.trim() ||
       (input.scenes?.length ? 'Preset scenes (no OpenAI)' : ''),
     script: { scenes: [] },
+    characterProfile: input.characterProfile,
+    environment: input.environment,
+    visual: input.visual,
   };
 
   await fs.promises.mkdir(paths.jobRoot, { recursive: true });
@@ -369,6 +463,7 @@ async function runContentPipelineInner(input: RunJobInput): Promise<RunJobResult
     duration_estimate: durationEstimate,
   };
   await writeMeta(paths, meta);
+  await writeDeclarativeSnapshot(paths, meta);
 
   pipelineLog('script.resolved', {
     jobId: input.jobId,
@@ -541,6 +636,8 @@ async function runVideoPhaseFromExistingAssetsInner(
       ffmpegMotion: sceneEmotionToFfmpegMotionLabel(s.emotion),
     })),
   });
+
+  await writeDeclarativeSnapshot(paths, meta);
 
   await runComfyPerScenes({
     paths,

@@ -62,6 +62,24 @@ Model LivePortrait tải lần đầu vào `ComfyUI/models/liveportrait` (HF). *
 
 **Nếu `class_type` lệch** với bản bạn cài: Export API từ Comfy và thay [`workflows/workflow_api.json`](../workflows/workflow_api.json), rồi cập nhật id trong [`src/config/comfy-workflow.ts`](../src/config/comfy-workflow.ts).
 
+### IP-Adapter (graph tùy biến)
+
+Graph mặc định trong repo **chỉ** LivePortrait (node `LoadImage` **6** = ảnh nguồn mặt). IP-Adapter thường gắn với luồng diffusion; để dùng, bạn **ghép node trong ComfyUI**, export API JSON (`Save (API Format)`), rồi:
+
+1. Trỏ app tới file workflow: **`WORKFLOW_PATH`** (đường dẫn tới JSON export), hoặc thay trực tiếp [`workflows/workflow_api.json`](../workflows/workflow_api.json).
+2. Cập nhật id cố định trong [`src/config/comfy-workflow.ts`](../src/config/comfy-workflow.ts) nếu node **6** / **7** / **13** / **25** đổi — hoặc chỉ thêm biến môi trường cho node ảnh phụ:
+   - **`COMFY_NODE_IP_ADAPTER_IMAGE`** — id **chuỗi** của node nhận file ảnh trong prompt API (thường `LoadImage` thứ hai). Khi set, app copy ảnh tham chiếu vào Comfy `input/` và gán `inputs.<key>`.
+   - **`COMFY_NODE_IP_ADAPTER_INPUT_KEY`** — tên field (mặc định `image`).
+
+Nguồn ảnh IP-Adapter:
+
+- Body `POST /jobs/render`: `visual.ipAdapterReferencePath` (relative `DATA_ROOT` hoặc absolute), hoặc
+- **`COMFY_IP_ADAPTER_REFERENCE_PATH`** — cùng quy ước đường dẫn.
+
+Nếu đã set `COMFY_NODE_IP_ADAPTER_IMAGE` nhưng **không** gửi path trên, app **fallback** sang cùng file ảnh nguồn LivePortrait (`Master_Face` / ảnh chain hiện tại) — hữu ích khi graph chỉ cần một face reference.
+
+Lỗi thường gặp: id node sai → Comfy báo validation; node không có `inputs.image` → đặt `COMFY_NODE_IP_ADAPTER_INPUT_KEY` đúng với export (xem JSON API).
+
 ## 3. Cấu hình `video-maker` (`.env`)
 
 ### Bắt buộc khi `SKIP_COMFY=0`
