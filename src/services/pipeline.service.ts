@@ -20,6 +20,8 @@ import { scriptScenesFullText } from '../types/script-schema.js';
 import { scriptService } from './script.service.js';
 import { voiceService } from './voice.service.js';
 import { comfyService } from './comfy.service.js';
+import { getLogContext } from '../shared/log-context.js';
+import { logger } from '../shared/logger.js';
 import { pipelineLog } from '../shared/pipeline-log.js';
 import {
   assembleFinalVideoPremuxed,
@@ -30,6 +32,10 @@ import {
   sceneEmotionToFfmpegMotionLabel,
   type SceneAlignmentChunk,
 } from './video.service.js';
+
+function jobLifecycle(msg: string, fields: Record<string, unknown>): void {
+  logger.info({ component: 'job', ...getLogContext(), ...fields }, msg);
+}
 
 export type RunJobInput = {
   jobId: string;
@@ -223,6 +229,14 @@ async function assembleMultiSceneFromChunks(
   const { alignment, normalizedAlignment } = mergeSceneAlignments(sceneChunks);
   const stitchedDuration = sceneChunks.reduce((s, c) => s + c.durationSec, 0);
   const bgm = resolveBgm(provider, bgmPath);
+  pipelineLog('assemble.bgm', {
+    resolved: Boolean(bgm),
+    bgmPathRelative: bgm
+      ? path.relative(provider.dataRoot, bgm)
+      : undefined,
+    bgmArgProvided: Boolean(bgmPath?.trim()),
+    bgmEnvFallback: Boolean(process.env.BGM_PATH?.trim()),
+  });
 
   await assembleFinalVideoPremuxed({
     paths,
@@ -247,6 +261,15 @@ async function runContentPipelineInner(input: RunJobInput): Promise<RunJobResult
   };
 
   await fs.promises.mkdir(paths.jobRoot, { recursive: true });
+  const t0 = Date.now();
+  jobLifecycle('job.start', {
+    event: 'start',
+    pipeline: 'content',
+    jobId: input.jobId,
+    scriptSource: input.scenes?.length ? 'preset_body' : 'openai',
+    ideaLength: input.idea?.trim()?.length ?? 0,
+    presetSceneCount: input.scenes?.length ?? 0,
+  });
 
   const cps = Number(process.env.CHARS_PER_SECOND ?? '14');
   let sortedScenes: ScriptScene[];
@@ -291,6 +314,11 @@ async function runContentPipelineInner(input: RunJobInput): Promise<RunJobResult
     })),
   });
 
+  pipelineLog('tts.full_voice.start', {
+    jobId: input.jobId,
+    charCount: fullText.length,
+    outPath: paths.audioVoice,
+  });
   const voiceFull = await voiceService.synthesizeWithTimestamps(
     fullText,
     paths.audioVoice,
@@ -364,6 +392,14 @@ async function runContentPipelineInner(input: RunJobInput): Promise<RunJobResult
     finalVideoPath: paths.finalOutput,
   });
 
+  jobLifecycle('job.complete', {
+    event: 'complete',
+    pipeline: 'content',
+    jobId: input.jobId,
+    durationMs: Date.now() - t0,
+    finalVideoPath: paths.finalOutput,
+  });
+
   return { meta, finalVideoPath: paths.finalOutput };
 }
 
@@ -411,6 +447,15 @@ async function runVideoPhaseFromExistingAssetsInner(
     throw new Error(`Missing full voice track (Comfy driver): ${paths.audioVoice}`);
   }
 
+  const t0 = Date.now();
+  jobLifecycle('job.start', {
+    event: 'start',
+    pipeline: 'from_video',
+    jobId: input.jobId,
+    reuseRawVideo: Boolean(input.reuseRawVideo),
+    bgmPathRequested: Boolean(input.bgmPath?.trim()),
+  });
+
   const sortedScenes = [...meta.script.scenes].sort((a, b) => a.id - b.id);
   const sceneChunks = await loadSceneAlignmentChunksFromDisk(paths, sortedScenes);
 
@@ -443,6 +488,14 @@ async function runVideoPhaseFromExistingAssetsInner(
     sceneChunks,
     input.bgmPath,
   );
+
+  jobLifecycle('job.complete', {
+    event: 'complete',
+    pipeline: 'from_video',
+    jobId: input.jobId,
+    durationMs: Date.now() - t0,
+    finalVideoPath: paths.finalOutput,
+  });
 
   return { meta, finalVideoPath: paths.finalOutput };
 }

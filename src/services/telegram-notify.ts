@@ -1,3 +1,5 @@
+import { logger } from '../shared/logger.js';
+
 export async function notifyTelegram(text: string): Promise<void> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -11,6 +13,9 @@ export async function notifyTelegram(text: string): Promise<void> {
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    console.error('Telegram sendMessage failed', res.status, body);
+    logger.error(
+      { status: res.status, body: body.slice(0, 500) },
+      'Telegram sendMessage failed',
+    );
   }
 }

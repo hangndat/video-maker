@@ -64,6 +64,8 @@ Model LivePortrait tải lần đầu vào `ComfyUI/models/liveportrait` (HF). *
 
 - `COMFY_HTTP_URL` — thường `http://127.0.0.1:8188`.
 - `COMFY_INPUT_DIR` / `COMFY_OUTPUT_DIR` — **đường dẫn tuyệt đối** tới `input` / `output` của ComfyUI.
+- **`COMFY_WS_TIMEOUT_MS`** — timeout chờ job qua WebSocket (mặc định 1h); tăng nếu `voice.mp3` dài hoặc máy chậm.
+- **`COMFY_OOM_MAX_RETRIES`** / **`COMFY_OOM_RETRY_SEC`** — retry khi Comfy báo hết VRAM (mặc định 3 lần, cách nhau 30s).
 - **Driving video:** ưu tiên **`COMFY_DRIVING_VIDEO`** (ghi đè); không set thì map `DATA_ROOT/assets/driving/*.mp4` theo emotion hook + fallback `driving_reference.mp4` — [pipeline.md §3](pipeline.md#31-comfy--liveportrait--chỉ-cảnh-đầu-hook).
 
 App copy vào input: `*_master.*`, `*_voice.mp3`, `*_driving.mp4`. Các file **phải** nằm trong đúng thư mục `input` mà **process Comfy** đang dùng (mặc định `ComfyUI/input` nếu bạn không truyền `--input-directory`). Chỉ set `COMFY_INPUT_DIR` trỏ vào `shared_data/comfy_input` **mà Comfy vẫn chạy mặc định** sẽ lỗi `Invalid … file`: hai bên không tự đồng bộ. Cách đúng: hoặc `.env` dùng đường dẫn tuyệt đối tới `…/ComfyUI/input` và `…/ComfyUI/output`, hoặc bật Comfy với `python main.py --input-directory …/shared_data/comfy_input --output-directory …/shared_data/comfy_output` trùng `.env`.

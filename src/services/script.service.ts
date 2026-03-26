@@ -1,5 +1,6 @@
 import OpenAI from 'openai';
 import { observeOpenAI } from '@langfuse/openai';
+import { pipelineLog } from '../shared/pipeline-log.js';
 import {
   scriptOutputSchema,
   scriptScenesFullText,
@@ -70,6 +71,12 @@ export class ScriptService {
     const fixHint =
       'Lần trước JSON sai. Trả DUY NHẤT object JSON: {"scenes":[{"id":1,"text":"...","emotion":"laugh|angry|confused|thinking|default|zoom_in_fast|pan_left|camera_shake"},...]}';
 
+    pipelineLog('agent.openai.script.start', {
+      ideaLength: idea.length,
+      model,
+      sessionId: sessionId ?? null,
+    });
+
     for (let attempt = 0; attempt < 3; attempt++) {
       const userContent =
         attempt === 0
@@ -89,16 +96,36 @@ export class ScriptService {
         const raw = completion.choices[0]?.message?.content ?? '';
         if (!raw) {
           lastErr = new Error('Empty OpenAI response');
+          pipelineLog('agent.openai.script.attempt_failed', {
+            attempt,
+            reason: 'empty_response',
+            sessionId: sessionId ?? null,
+          });
           continue;
         }
         const parsed = JSON.parse(stripJsonFence(raw));
         const safe = scriptOutputSchema.safeParse(parsed);
         if (!safe.success) {
           lastErr = safe.error;
+          pipelineLog('agent.openai.script.attempt_failed', {
+            attempt,
+            reason: 'schema_validation',
+            issueCount: safe.error.issues.length,
+            sessionId: sessionId ?? null,
+          });
           continue;
         }
         const { scenes, duration_estimate } = safe.data;
         const textJoined = scriptScenesFullText(scenes);
+        pipelineLog('agent.openai.script.complete', {
+          sceneCount: scenes.length,
+          duration_estimate:
+            duration_estimate ?? roughDurationFromScenes(textJoined),
+          model,
+          promptTokens: completion.usage?.prompt_tokens,
+          completionTokens: completion.usage?.completion_tokens,
+          sessionId: sessionId ?? null,
+        });
         return {
           scenes,
           duration_estimate:
@@ -106,6 +133,12 @@ export class ScriptService {
         };
       } catch (e) {
         lastErr = e;
+        pipelineLog('agent.openai.script.attempt_failed', {
+          attempt,
+          reason: 'exception',
+          message: e instanceof Error ? e.message : String(e),
+          sessionId: sessionId ?? null,
+        });
       }
     }
 

@@ -138,6 +138,10 @@ npm run verify:driving
 
 **Comfy sống:** `npm run check:comfy`.
 
+**Chỉ Comfy (debug graph):** `npm run comfy:render -- <jobId>` — xem header `scripts/comfy-render-only.ts`.
+
+**Langfuse self-host:** `npm run langfuse:env` → `docker compose -f docker-compose.langfuse.yml --env-file .env.langfuse up -d` — khóa dự án copy vào `.env` app (`LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`).
+
 ---
 
 ## 6b. Emoji (phụ đề & TTS)
@@ -160,17 +164,29 @@ npm run verify:driving
 
 ## 8. Docker / `DATA_ROOT`
 
-Trong Compose, `DATA_ROOT` thường là `/data` — map clip driving tới `/data/assets/driving/` trong volume giống máy dev.
+Trong Compose (`docker-compose.yml`), `DATA_ROOT` là `/data`, mount `./shared_data` → `/data`. App cũng set **`LOG_FILE=/data/logs/app.jsonl`** — log dòng JSON (NDJSON) chung volume với job và asset; clip driving vẫn ở `/data/assets/driving/`.
+
+**Langfuse** (tuỳ chọn): stack riêng [`docker-compose.langfuse.yml`](../docker-compose.langfuse.yml) — trace OTEL từ OpenAI / pipeline / ElevenLabs khi có `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY` và (self-host) `LANGFUSE_BASE_URL`. Xem [README — Biến môi trường](../README.md#biến-môi-trường).
 
 ---
 
-## 9. Liên kết code
+## 9. Quan sát (Langfuse / log)
+
+- **Langfuse:** `src/instrumentation.ts` bật `NodeSDK` + `LangfuseSpanProcessor` khi đủ khóa; `src/services/script.service.ts` dùng `observeOpenAI`; `src/services/pipeline.service.ts` và `src/services/voice.service.ts` dùng `@langfuse/tracing`. Tắt hẳn: `LANGFUSE_TRACING_ENABLED=0`.
+- **Log app:** Pino (`src/shared/logger.ts`): `LOG_LEVEL`, `LOG_PRETTY`, `LOG_FILE` (Docker: file trên `DATA_ROOT`).
+- **Pipeline chi tiết:** `PIPELINE_LOG=1` → `src/shared/pipeline-log.ts`.
+
+---
+
+## 10. Liên kết code
 
 | Chủ đề | File |
 |--------|------|
 | Map driving + resolve cho Comfy | `src/config/driving-videos.ts` |
 | Submit prompt, copy input, node 7 | `src/services/comfy.service.ts` |
 | Orchestration, alignment persist | `src/services/pipeline.service.ts` |
-| OpenAI + schema `scenes` / `emotion` | `src/services/script.service.ts`, `src/types/script-schema.ts` |
+| OpenAI + schema `scenes` / `emotion` + Langfuse | `src/services/script.service.ts`, `src/types/script-schema.ts` |
+| TTS + trace / cost | `src/services/voice.service.ts` |
+| OTEL Langfuse | `src/instrumentation.ts` |
 | Clip / concat / ASS | `src/services/video.service.ts` |
 | Id node workflow | `src/config/comfy-workflow.ts`, `workflows/workflow_api.json` |

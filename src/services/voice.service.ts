@@ -5,6 +5,7 @@ import type { CharacterAlignment } from '../types/elevenlabs.js';
 import { characterAlignmentSchema } from '../types/elevenlabs.js';
 import { audioWithTimestampsResponseSchema } from '../types/elevenlabs-response.js';
 import { ffprobeDurationSec } from '../shared/ffprobe.js';
+import { pipelineLog } from '../shared/pipeline-log.js';
 
 export type VoiceSynthesisResult = {
   audioPath: string;
@@ -23,6 +24,18 @@ function ttsInputForTrace(text: string): string | { charCount: number } {
   return { charCount: text.length };
 }
 
+/** Ước lượng USD cho Langfuse; ElevenLabs không trả cost trong API — tự set theo bảng giá của bạn. */
+function elevenLabsEstimatedUsd(inputCharCount: number): number | undefined {
+  const raw =
+    process.env.LANGFUSE_ELEVENLABS_USD_PER_1K_CHARS?.trim() ??
+    process.env.ELEVENLABS_LANGFUSE_USD_PER_1K_CHARS?.trim();
+  if (!raw) return undefined;
+  const per1k = Number(raw);
+  if (!Number.isFinite(per1k) || per1k < 0) return undefined;
+  const usd = (inputCharCount / 1000) * per1k;
+  return Math.round(usd * 1e6) / 1e6;
+}
+
 export class VoiceService {
   async synthesizeWithTimestamps(
     text: string,
@@ -39,6 +52,13 @@ export class VoiceService {
 
         const modelId =
           process.env.ELEVENLABS_MODEL ?? 'eleven_multilingual_v2';
+        pipelineLog('agent.elevenlabs.tts.start', {
+          kind: traceOpts?.kind ?? 'full',
+          sceneId: traceOpts?.sceneId,
+          charCount: text.length,
+          modelId,
+          audioFile: path.basename(audioOutPath),
+        });
         const outputFormat =
           process.env.ELEVENLABS_OUTPUT_FORMAT ?? 'mp3_44100_128';
 
@@ -112,12 +132,31 @@ export class VoiceService {
           actualDurationSec = ends.length > 0 ? Math.max(...ends) : 0;
         }
 
+        const estUsd = elevenLabsEstimatedUsd(text.length);
+        // Langfuse: cost_details.total/input (USD). OTEL ingest also reads gen_ai.usage.cost as { total }.
+        const costDetailsPayload =
+          estUsd != null
+            ? { total: estUsd, input: estUsd }
+            : undefined;
+        if (estUsd != null) {
+          observation.otelSpan.setAttribute('gen_ai.usage.cost', estUsd);
+        }
         observation.update({
           output: {
             audioPath: audioOutPath,
             actualDurationSec,
             hasNormalizedAlignment: Boolean(parsed.normalized_alignment),
           },
+          usageDetails: { input: text.length },
+          ...(costDetailsPayload ? { costDetails: costDetailsPayload } : {}),
+        });
+
+        pipelineLog('agent.elevenlabs.tts.complete', {
+          kind: traceOpts?.kind ?? 'full',
+          sceneId: traceOpts?.sceneId,
+          actualDurationSec,
+          audioFile: path.basename(audioOutPath),
+          hasNormalizedAlignment: Boolean(parsed.normalized_alignment),
         });
 
         return {

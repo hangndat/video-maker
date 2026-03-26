@@ -1,10 +1,14 @@
 import 'dotenv/config';
 import './instrumentation.js';
 import express from 'express';
+import { httpLogger, requestIdMiddleware } from './middleware/request-log.js';
 import { jobsRouter } from './api/jobs.routes.js';
 import { shutdownLangfuseOtel } from './instrumentation.js';
+import { logger } from './shared/logger.js';
 
 const app = express();
+app.use(requestIdMiddleware);
+app.use(httpLogger);
 app.use(express.json({ limit: '2mb' }));
 
 app.get('/', (_req, res) => {
@@ -31,11 +35,11 @@ app.use('/jobs', jobsRouter);
 
 const port = Number(process.env.PORT ?? '3000');
 const server = app.listen(port, () => {
-  console.log(`listening on ${port}`);
+  logger.info({ port }, 'listening');
 });
 
 async function gracefulShutdown(signal: string): Promise<void> {
-  console.log(`${signal}: shutdown`);
+  logger.info({ signal }, 'shutdown');
   await new Promise<void>((resolve, reject) => {
     server.close((err) => (err ? reject(err) : resolve()));
   });

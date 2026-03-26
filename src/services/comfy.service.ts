@@ -268,6 +268,11 @@ export class ComfyService {
           oomRetries < this.oomMax
         ) {
           oomRetries += 1;
+          pipelineLog('agent.comfy.oom_retry', {
+            jobId: params.jobId,
+            attempt: oomRetries,
+            maxRetries: this.oomMax,
+          });
           const delay = Number(process.env.COMFY_OOM_RETRY_SEC ?? '30') * 1000;
           await new Promise((r) => setTimeout(r, delay));
           continue;
@@ -301,6 +306,7 @@ export class ComfyService {
     pipelineLog('comfy.driving', {
       drivingEmotion,
       drivingSrc,
+      drivingSrcRelative: path.relative(defaultDataRoot(), drivingSrc),
       comfyInputBasename: drivingName,
       jobId,
     });
@@ -361,6 +367,8 @@ export class ComfyService {
       throw new Error('Comfy /prompt missing prompt_id');
     }
 
+    pipelineLog('agent.comfy.prompt_submitted', { jobId, promptId });
+
     const timeoutMs = Number(process.env.COMFY_WS_TIMEOUT_MS ?? '3600000');
     try {
       await waitForPromptWs(ws, promptId, timeoutMs);
@@ -394,6 +402,13 @@ export class ComfyService {
       recursive: true,
     });
     await fs.promises.copyFile(srcFile, rawVideoOutPath);
+
+    pipelineLog('agent.comfy.video_saved', {
+      jobId,
+      promptId,
+      rawVideoBasename: path.basename(rawVideoOutPath),
+      comfyOutputBasename: path.basename(srcFile),
+    });
   }
 }
 

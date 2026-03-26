@@ -9,6 +9,8 @@ services:
       - .env
     environment:
       DATA_ROOT: /data
+      # NDJSON log on the shared volume: host ./shared_data/logs/app.jsonl
+      LOG_FILE: /data/logs/app.jsonl
     volumes:
       - ./shared_data:/data
 

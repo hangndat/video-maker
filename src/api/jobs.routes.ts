@@ -6,6 +6,7 @@ import {
 } from '../services/pipeline.service.js';
 import { ComfyOutOfMemoryError, ComfyWorkflowError } from '../services/comfy.service.js';
 import { scriptSceneSchema } from '../types/script-schema.js';
+import { runWithLogContext } from '../shared/log-context.js';
 
 const renderBody = z
   .object({
@@ -38,8 +39,12 @@ jobsRouter.post('/render', async (req, res) => {
     return;
   }
 
+  const body = parsed.data;
   try {
-    const result = await runContentPipeline(parsed.data);
+    const result = await runWithLogContext(
+      { requestId: String(req.id), jobId: body.jobId },
+      () => runContentPipeline(body),
+    );
     res.json({
       ok: true,
       finalVideoPath: result.finalVideoPath,
@@ -48,14 +53,25 @@ jobsRouter.post('/render', async (req, res) => {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (e instanceof ComfyWorkflowError) {
+      req.log.warn(
+        { err: e, jobId: body.jobId, requestId: String(req.id), httpStatus: 502 },
+        'jobs.render comfy workflow',
+      );
       res.status(502).json({ ok: false, error: msg });
       return;
     }
     if (e instanceof ComfyOutOfMemoryError) {
+      req.log.warn(
+        { err: e, jobId: body.jobId, requestId: String(req.id), httpStatus: 503 },
+        'jobs.render comfy oom',
+      );
       res.status(503).json({ ok: false, error: msg });
       return;
     }
-    console.error(e);
+    req.log.error(
+      { err: e, jobId: body.jobId, requestId: String(req.id) },
+      'jobs.render failed',
+    );
     res.status(500).json({ ok: false, error: msg });
   }
 });
@@ -67,8 +83,12 @@ jobsRouter.post('/render/from-video', async (req, res) => {
     return;
   }
 
+  const body = parsed.data;
   try {
-    const result = await runVideoPhaseFromExistingAssets(parsed.data);
+    const result = await runWithLogContext(
+      { requestId: String(req.id), jobId: body.jobId },
+      () => runVideoPhaseFromExistingAssets(body),
+    );
     res.json({
       ok: true,
       finalVideoPath: result.finalVideoPath,
@@ -77,6 +97,10 @@ jobsRouter.post('/render/from-video', async (req, res) => {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (/Job meta not found/i.test(msg)) {
+      req.log.warn(
+        { err: e, jobId: body.jobId, requestId: String(req.id), httpStatus: 404 },
+        'jobs.from_video not found',
+      );
       res.status(404).json({ ok: false, error: msg });
       return;
     }
@@ -85,18 +109,33 @@ jobsRouter.post('/render/from-video', async (req, res) => {
         msg,
       )
     ) {
+      req.log.warn(
+        { err: e, jobId: body.jobId, requestId: String(req.id), httpStatus: 400 },
+        'jobs.from_video bad request',
+      );
       res.status(400).json({ ok: false, error: msg });
       return;
     }
     if (e instanceof ComfyWorkflowError) {
+      req.log.warn(
+        { err: e, jobId: body.jobId, requestId: String(req.id), httpStatus: 502 },
+        'jobs.from_video comfy workflow',
+      );
       res.status(502).json({ ok: false, error: msg });
       return;
     }
     if (e instanceof ComfyOutOfMemoryError) {
+      req.log.warn(
+        { err: e, jobId: body.jobId, requestId: String(req.id), httpStatus: 503 },
+        'jobs.from_video comfy oom',
+      );
       res.status(503).json({ ok: false, error: msg });
       return;
     }
-    console.error(e);
+    req.log.error(
+      { err: e, jobId: body.jobId, requestId: String(req.id) },
+      'jobs.from_video failed',
+    );
     res.status(500).json({ ok: false, error: msg });
   }
 });

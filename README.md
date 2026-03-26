@@ -1,6 +1,6 @@
 # Ma Chủ — Video Maker
 
-Backend **orchestrator** sinh video dọc (TikTok-style): kịch bản **đa cảnh** (OpenAI, JSON `scenes[]` + `emotion` cho từng cảnh) → ElevenLabs (một track **full** cho Comfy + **từng cảnh** + lưu alignment) → **ComfyUI** LivePortrait → **FFmpeg**: filter theo cảnh (zoom / pan / shake), concat, đốt ASS, mix BGM.
+Backend **orchestrator** sinh video dọc (TikTok-style): kịch bản **đa cảnh** (OpenAI, JSON `scenes[]` + `emotion` cho từng cảnh) → ElevenLabs (một track **full** cho Comfy + **từng cảnh** + lưu alignment) → **ComfyUI** LivePortrait → **FFmpeg**: filter theo cảnh (zoom / pan / shake), concat, đốt ASS, mix BGM. **Tuỳ chọn:** trace **Langfuse** (OpenAI + pipeline + TTS) qua OTEL khi cấu hình khóa trong `.env`.
 
 Không có UI web; gọi **HTTP API** hoặc tích hợp **n8n** (Compose có profile `full`).
 
@@ -52,7 +52,7 @@ Chi tiết Comfy, model, macOS: [**docs/comfy-macos.md**](docs/comfy-macos.md).
 
 | Thành phần | Ghi chú |
 |------------|---------|
-| **Node.js** | ≥ 18 |
+| **Node.js** | ≥ 20 (theo `package.json` engines) |
 | **FFmpeg** | Có `libass` (phụ đề). macOS: `brew install ffmpeg` |
 | **OpenAI API** | Sinh kịch bản |
 | **ElevenLabs API** | TTS + `with-timestamps` (alignment) |
@@ -113,15 +113,29 @@ Bản đầy đủ có comment trong [`.env.example`](.env.example). Bảng rút
 | `COMFY_WS_URL` | Tuỳ chọn WebSocket |
 | `COMFY_ROOT` | Gốc Comfy có `input/` + `output/` — app suy ra input/output nếu chưa set `COMFY_INPUT_DIR` |
 | `COMFY_INPUT_DIR` / `COMFY_OUTPUT_DIR` | Ghi đè: nơi Comfy đọc/ghi file (phải trùng server) |
+| `COMFY_OOM_MAX_RETRIES` | Số lần retry khi Comfy báo OOM (mặc định `3`) |
+| `COMFY_OOM_RETRY_SEC` | Chờ giữa các lần retry OOM, giây (mặc định `30`) |
+| `COMFY_WS_TIMEOUT_MS` | Timeout chờ job Comfy qua WebSocket (mặc định `3600000`) |
 | `COMFY_DRIVING_VIDEO` | **Ghi đè** emotion: đường tuyệt đối tới mp4 lái. Nếu không set: file lấy từ `DATA_ROOT/assets/driving/` theo emotion **cảnh đầu** (xem `src/config/driving-videos.ts`). Fallback: `DATA_ROOT/assets/driving_reference.mp4` |
-| `WORKFLOW_PATH` | Tuỳ chọn: JSON workflow API khác |
+| `WORKFLOW_PATH` | Tuỳ chọn: JSON workflow API khác mặc định ([`workflows/workflow_api.json`](workflows/workflow_api.json)) |
 | `SKIP_COMFY` | `1` = không gọi Comfy (placeholder video) |
 | `BGM_PATH` | Nhạc nền (đối với `DATA_ROOT` hoặc tuyệt đối) |
 | `TIKTOK_SAFE_BOTTOM_PCT`, `ASS_*`, `AUDIO_MIX_MODE`, `BGM_*` | Subtitle + mix (xem code / .env.example) |
 | `TELEGRAM_*` | Thông báo lỗi Comfy (tuỳ chọn) |
+| `PIPELINE_LOG` | `1` = log orchestration chi tiết ra stderr (`src/shared/pipeline-log.ts`) |
+| `LOG_LEVEL` | Mức log Pino (mặc định `info`) |
+| `LOG_PRETTY` | `1` = stdout dạng đọc được (pino-pretty) |
+| `LOG_FILE` | Đường dẫn file NDJSON (append); trong Docker Compose mặc định `/data/logs/app.jsonl` |
 | `DEBUG_FFMPEG` | `1` = log lệnh ffmpeg (debug) |
+| `FFMPEG_PATH` / `FFPROBE_PATH` | Ghi đè binary FFmpeg / ffprobe nếu không có trong `PATH` |
 | `FFMPEG_PRESET` | Preset libx264 khi concat (mặc định `veryfast`) |
 | `FFMPEG_CRF` | CRF khi concat (mặc định `20`) |
+| `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | Bật tracing OTEL → Langfuse khi **cả hai** có giá trị |
+| `LANGFUSE_TRACING_ENABLED` | `0` = tắt tracing dù đã set key |
+| `LANGFUSE_OTEL_EXPORT_MODE` | `immediate` = flush span nhanh (hữu ích khi debug) |
+| `LANGFUSE_BASE_URL` | Host Langfuse self-host (thường khớp UI, vd. `http://127.0.0.1:3030`) — xem `.env.example` |
+| `LANGFUSE_ELEVENLABS_USD_PER_1K_CHARS` | Ước lượng chi phí TTS trên Langfuse (USD / 1000 ký tự) |
+| `LANGFUSE_LOG_TTS_TEXT` | `1` = gửi toàn bộ chuỗi TTS vào trace (mặc định chỉ đếm ký tự) |
 
 **Quan trọng:** File master / voice / driving phải nằm trong **`input` thật** của process Comfy. Nếu không set `COMFY_*` đường dẫn, app thử `../ComfyUI`, `~/SideProject/ComfyUI`, `~/ComfyUI`.
 
@@ -131,6 +145,8 @@ Bản đầy đủ có comment trong [`.env.example`](.env.example). Bảng rút
 
 ```
 shared_data/                    # hoặc DATA_ROOT khi override
+  logs/
+    app.jsonl                  # tuỳ chọn: khi set LOG_FILE (Docker Compose ghi /data/logs/app.jsonl)
   assets/
     Master_Face.png
     driving_reference.mp4    # fallback khi thiếu file trong driving/
@@ -262,6 +278,9 @@ Lỗi validation body → `400`. Lỗi Comfy workflow → `502`. OOM Comfy → `
 | `npm run verify:driving` | Kiểm tra map emotion → `assets/driving/*.mp4` (không tốn API; cùng logic Comfy) |
 | `npm run phase3:preset` | Phase 3: preset **~15s**, [`fixtures/phase3-preset-scenes.json`](fixtures/phase3-preset-scenes.json) (**không OpenAI**). Dài: `PHASE3_FIXTURE=fixtures/phase3-preset-scenes-long.json`. Log: `PIPELINE_LOG=1` |
 | `npm run install:comfy-nodes` | Clone LivePortraitKJ + VHS + pip (cần `COMFY_ROOT`) |
+| `npm run comfy:render` | Chỉ Comfy (không OpenAI / ElevenLabs / FFmpeg): `npm run comfy:render -- <jobId>` hoặc `COMFY_ONLY_JOB_ID=...`. Cần `audio/voice.mp3`; tuỳ chọn `COMFY_TEST_EMOTION` (ghi đè emotion hook). Không đặt `SKIP_COMFY=1` |
+| `npm run langfuse:seed` | Sinh seed bash cho Docker Langfuse (`scripts/gen-langfuse-seed.sh`) |
+| `npm run langfuse:env` | Ghi `.env.langfuse` an toàn từ seed (khuyến nghị thay `> .env.langfuse`) |
 
 **Smoke trả phí tối thiểu (sau khi `smoke:multiscene` xanh):** một lần `POST /jobs/render` với `SKIP_COMFY=1`, `idea` ngắn (2–3 cảnh mong đợi); kiểm tra đủ `scene-*.alignment.json`, rồi `POST /jobs/render/from-video` với `reuseRawVideo: true` để xác nhận tái dùng raw placeholder.
 
@@ -273,8 +292,10 @@ Lỗi validation body → `400`. Lỗi Comfy workflow → `502`. OOM Comfy → `
 docker compose up --build
 ```
 
-- Service **`app`** expose `3000`, mount `./shared_data` → `/data`.
+- Service **`app`** expose `3000`, mount `./shared_data` → `/data`. Trong Compose, `DATA_ROOT=/data` và **`LOG_FILE=/data/logs/app.jsonl`** — log NDJSON append (thư mục `logs/` được tạo khi ghi).
 - **`redis`** / **`n8n`**: profile `full` — `docker compose --profile full up`.
+
+**Langfuse tự host (tuỳ chọn, tách khỏi stack app):** [`docker-compose.langfuse.yml`](docker-compose.langfuse.yml). Khởi động mẫu: `docker compose -f docker-compose.langfuse.yml --env-file .env.langfuse up -d`. Sinh `.env.langfuse`: `npm run langfuse:env` (hoặc `npm run langfuse:seed`). Copy `LANGFUSE_INIT_PROJECT_PUBLIC_KEY` / `SECRET_KEY` vào `.env` của app làm `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` — xem comment trong [`.env.example`](.env.example).
 
 ComfyUI **không** nằm trong image app; chạy host riêng và trỏ `.env` tới đó (hoặc mạng Docker nếu bạn tự thêm service Comfy).
 
@@ -294,6 +315,8 @@ File mặc định: [`workflows/workflow_api.json`](workflows/workflow_api.json)
 | [docs/dev-phases.md](docs/dev-phases.md) | Phase dev + Definition of done + kế hoạch test T0–T4 (ưu tiên $0 với `smoke:multiscene`) |
 | [docs/README.md](docs/README.md) | Mục lục thư mục `docs/` |
 | [docs/comfy-macos.md](docs/comfy-macos.md) | ComfyUI + LivePortrait + macOS + symlink / `COMFY_*` + lỗi thường gặp |
+| [docker-compose.langfuse.yml](docker-compose.langfuse.yml) | Stack Langfuse self-host (OTEL / trace UI) — dùng cùng khóa dự án trong `.env` app |
+| [.env.langfuse.example](.env.langfuse.example) | Mẫu env cho stack Langfuse; khuyến nghị `npm run langfuse:env` thay vì chỉnh tay |
 | [.env.example](.env.example) | Mẫu biến môi trường có comment |
 
 ---

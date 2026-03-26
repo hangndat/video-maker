@@ -61,6 +61,8 @@ Chiến lược: tách chỉnh FFmpeg / ghép cảnh khỏi OpenAI, ElevenLabs, 
 
 **Việc làm:** Một lần `POST /jobs/render` với `SKIP_COMFY=1`. Dùng **`scenes`** trong body (2–3 cảnh) để **không gọi OpenAI** — chỉ tốn ElevenLabs + placeholder Comfy; hoặc `idea` ngắn nếu muốn kiểm cả prompt.
 
+**Tuỳ chọn — quan sát:** bật Langfuse (`LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`, self-host: `docker-compose.langfuse.yml` + `npm run langfuse:env`) để xem trace OpenAI / TTS và ước lượng chi phí (`LANGFUSE_ELEVENLABS_USD_PER_1K_CHARS`).
+
 **Definition of done**
 
 - HTTP **200**, `meta.json` đủ scene + `scene-*.alignment.json`.

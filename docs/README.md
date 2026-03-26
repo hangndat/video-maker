@@ -6,7 +6,9 @@
 | [**pipeline.md**](pipeline.md) | Luồng chi tiết đa cảnh, bảng `emotion` → driving / FFmpeg, artifact `audio/*`, reuse, test `verify:driving`, liên kết mã nguồn |
 | [**dev-phases.md**](dev-phases.md) | Phase dev ($0 → trả phí): Definition of done + bảng test T0–T4, cổng chuyển phase |
 | [comfy-macos.md](comfy-macos.md) | ComfyUI native macOS, LivePortrait KJ, VHS, model, symlink / `COMFY_INPUT_DIR` / `COMFY_OUTPUT_DIR`, lỗi thường gặp |
-| [.env.example](../.env.example) | Mẫu `.env` có comment |
+| [docker-compose.langfuse.yml](../docker-compose.langfuse.yml) | Langfuse self-host; kết hợp với `LANGFUSE_*` trong `.env` app (`npm run langfuse:env`) |
+| [.env.example](../.env.example) | Mẫu `.env` có comment (gồm Langfuse, log file, Comfy retry/timeout) |
+| [.env.langfuse.example](../.env.langfuse.example) | Mẫu biến cho compose Langfuse (thực tế nên dùng `npm run langfuse:env` để sinh secrets) |
 
 **Luồng đọc gợi ý**
 
