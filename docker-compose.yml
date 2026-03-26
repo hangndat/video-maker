@@ -1,0 +1,34 @@
+# App orchestrator only. On macOS: run ComfyUI natively (Metal), not inside this compose — see docs/comfy-macos.md.
+# On Linux+GPU you may add your own Comfy service; set COMFY_HTTP_URL / COMFY_WS_URL / COMFY_INPUT_DIR / COMFY_OUTPUT_DIR on the app host.
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      DATA_ROOT: /data
+    volumes:
+      - ./shared_data:/data
+
+  redis:
+    image: redis:7-alpine
+    profiles:
+      - full
+    ports:
+      - "6379:6379"
+
+  n8n:
+    image: n8nio/n8n:latest
+    profiles:
+      - full
+    ports:
+      - "5678:5678"
+    environment:
+      - N8N_HOST=0.0.0.0
+    volumes:
+      - n8n_data:/home/node/.n8n
+
+volumes:
+  n8n_data: {}

@@ -1,0 +1,304 @@
+# Ma Chủ — Video Maker
+
+Backend **orchestrator** sinh video dọc (TikTok-style): kịch bản **đa cảnh** (OpenAI, JSON `scenes[]` + `emotion` cho từng cảnh) → ElevenLabs (một track **full** cho Comfy + **từng cảnh** + lưu alignment) → **ComfyUI** LivePortrait → **FFmpeg**: filter theo cảnh (zoom / pan / shake), concat, đốt ASS, mix BGM.
+
+Không có UI web; gọi **HTTP API** hoặc tích hợp **n8n** (Compose có profile `full`).
+
+**Tài liệu chi tiết (emotion, driving, reuse, artifact, test):** [**docs/pipeline.md**](docs/pipeline.md).
+
+---
+
+## Mục lục nhanh
+
+- [Kiến trúc pipeline](#kiến-trúc-pipeline) · [Yêu cầu](#yêu-cầu) · [Cài đặt](#cài-đặt-nhanh) · [Comfy](#chuẩn-bị-comfyui-tóm-tắt)
+- [Biến môi trường](#biến-môi-trường) · [Cấu trúc DATA_ROOT](#cấu-trúc-data_root) · [API](#api-http) · [Scripts](#scripts-npm)
+- [Docker](#docker) · [Workflow Comfy](#workflow-api-comfy) · [Tài liệu thêm](#tài-liệu-thêm)
+
+---
+
+## Kiến trúc pipeline
+
+```mermaid
+flowchart LR
+  idea[Idea]
+  script[OpenAI multi-scene]
+  ttsFull[ElevenLabs full voice]
+  comfy[ComfyUI raw.mp4]
+  ttsSc[ElevenLabs per scene + alignment.json]
+  clips[FFmpeg scene clips]
+  concat[Concat clips]
+  ass[ASS + BGM]
+  out[final/output.mp4]
+
+  idea --> script
+  script --> ttsFull
+  ttsFull --> comfy
+  script --> ttsSc
+  comfy --> clips
+  ttsSc --> clips
+  clips --> concat
+  concat --> ass
+  ass --> out
+```
+
+- **`SKIP_COMFY=1`**: bỏ Comfy, dùng video placeholder nhưng vẫn OpenAI + ElevenLabs + bước cắt cảnh / concat / ASS như trên.
+- **Tái dùng (không gọi lại OpenAI / ElevenLabs)**: sau **một lần** `POST /jobs/render`, dùng `POST /jobs/render/from-video` (mục [API](#api-http)). Cần đủ file `audio/*` kèm `scene-*.alignment.json`.
+
+Chi tiết Comfy, model, macOS: [**docs/comfy-macos.md**](docs/comfy-macos.md).
+
+---
+
+## Yêu cầu
+
+| Thành phần | Ghi chú |
+|------------|---------|
+| **Node.js** | ≥ 18 |
+| **FFmpeg** | Có `libass` (phụ đề). macOS: `brew install ffmpeg` |
+| **OpenAI API** | Sinh kịch bản |
+| **ElevenLabs API** | TTS + `with-timestamps` (alignment) |
+| **ComfyUI** | Khi `SKIP_COMFY=0`: LivePortrait KJ + Video Helper Suite, xem [docs/comfy-macos.md](docs/comfy-macos.md) |
+
+---
+
+## Cài đặt nhanh
+
+```bash
+git clone <repo-url> && cd video-maker
+cp .env.example .env
+# Điền OPENAI_API_KEY, ELEVENLABS_*, và (nếu dùng Comfy) COMFY_ROOT hoặc COMFY_INPUT_DIR / COMFY_OUTPUT_DIR
+
+npm install
+npm run build          # hoặc chỉ dùng tsx cho dev
+npm run dev            # http://localhost:3000
+```
+
+Tài sản tĩnh tối thiểu (Comfy bật):
+
+- `shared_data/assets/Master_Face.png` — ảnh mặt chính diện.
+- `shared_data/assets/driving/*.mp4` — clip lái theo mood (bắt buộc nếu không set `COMFY_DRIVING_VIDEO`); map mặc định: `angry_power`, `laugh_mocking`, `confused_ngo`, `deep_thinking`, `default_arrogant` — xem [docs/pipeline.md §3](docs/pipeline.md#3-emotion--hai-vai-trò-khác-nhau).
+- `shared_data/assets/driving_reference.mp4` — **fallback** khi thiếu file trong `driving/` (hoặc dùng làm clip cố định qua `COMFY_DRIVING_VIDEO`).
+
+---
+
+## Chuẩn bị ComfyUI (tóm tắt)
+
+1. Cài ComfyUI native (Python 3.12 khuyến nghị).
+2. Chạy:
+
+   ```bash
+   export COMFY_ROOT=/đường/dẫn/ComfyUI
+   npm run install:comfy-nodes
+   ```
+
+3. Bật Comfy: `./venv/bin/python main.py --listen 127.0.0.1 --port 8188`
+4. Kiểm tra: `npm run check:comfy`
+
+Toàn bộ bước, patch macOS, lỗi thường gặp: [docs/comfy-macos.md](docs/comfy-macos.md).
+
+---
+
+## Biến môi trường
+
+Bản đầy đủ có comment trong [`.env.example`](.env.example). Bảng rút:
+
+| Biến | Ý nghĩa |
+|------|---------|
+| `PORT` | Port HTTP API (mặc định 3000) |
+| `DATA_ROOT` | Gốc dữ liệu (mặc định `./shared_data`) |
+| `OPENAI_API_KEY` / `OPENAI_MODEL` | Kịch bản |
+| `OPENAI_BASE_URL` | Tuỳ chọn: proxy/Azure |
+| `CHARS_PER_SECOND` | Gợi ý độ dài script |
+| `ELEVENLABS_*` | Key, `VOICE_ID`, `MODEL`, `OUTPUT_FORMAT` |
+| `COMFY_HTTP_URL` | URL Comfy (vd. `http://127.0.0.1:8188`) |
+| `COMFY_WS_URL` | Tuỳ chọn WebSocket |
+| `COMFY_ROOT` | Gốc Comfy có `input/` + `output/` — app suy ra input/output nếu chưa set `COMFY_INPUT_DIR` |
+| `COMFY_INPUT_DIR` / `COMFY_OUTPUT_DIR` | Ghi đè: nơi Comfy đọc/ghi file (phải trùng server) |
+| `COMFY_DRIVING_VIDEO` | **Ghi đè** emotion: đường tuyệt đối tới mp4 lái. Nếu không set: file lấy từ `DATA_ROOT/assets/driving/` theo emotion **cảnh đầu** (xem `src/config/driving-videos.ts`). Fallback: `DATA_ROOT/assets/driving_reference.mp4` |
+| `WORKFLOW_PATH` | Tuỳ chọn: JSON workflow API khác |
+| `SKIP_COMFY` | `1` = không gọi Comfy (placeholder video) |
+| `BGM_PATH` | Nhạc nền (đối với `DATA_ROOT` hoặc tuyệt đối) |
+| `TIKTOK_SAFE_BOTTOM_PCT`, `ASS_*`, `AUDIO_MIX_MODE`, `BGM_*` | Subtitle + mix (xem code / .env.example) |
+| `TELEGRAM_*` | Thông báo lỗi Comfy (tuỳ chọn) |
+| `DEBUG_FFMPEG` | `1` = log lệnh ffmpeg (debug) |
+| `FFMPEG_PRESET` | Preset libx264 khi concat (mặc định `veryfast`) |
+| `FFMPEG_CRF` | CRF khi concat (mặc định `20`) |
+
+**Quan trọng:** File master / voice / driving phải nằm trong **`input` thật** của process Comfy. Nếu không set `COMFY_*` đường dẫn, app thử `../ComfyUI`, `~/SideProject/ComfyUI`, `~/ComfyUI`.
+
+---
+
+## Cấu trúc `DATA_ROOT`
+
+```
+shared_data/                    # hoặc DATA_ROOT khi override
+  assets/
+    Master_Face.png
+    driving_reference.mp4    # fallback khi thiếu file trong driving/
+    driving/                 # clip lái theo mood (angry_power, laugh_mocking, …)
+  jobs/
+    {jobId}/
+      meta.json                 # script.scenes[], voice summary, comfy paths
+      audio/
+        voice.mp3               # giọng full (lip-sync Comfy)
+        scene-{id}.mp3          # giọng từng cảnh (mux sau ghép)
+        scene-{id}.alignment.json  # alignment ElevenLabs (cho ASS + /render/from-video)
+      subtitles/burn.ass
+      comfy/
+        raw.mp4                 # output Comfy
+        scenes/
+          clip-{id}.mp4         # từng cảnh sau filter emotion
+          concat.mp4            # nối clip trước bước ASS
+          concat.txt            # danh sách file cho demuxer FFmpeg
+      final/output.mp4          # sản phẩm cuối
+```
+
+Trong Docker Compose, `DATA_ROOT` trong container là `/data`, mount `./shared_data:/data`.
+
+---
+
+## API HTTP
+
+| Phương thức | Đường dẫn | Mô tả |
+|-------------|-----------|--------|
+| `GET` | `/` | Trang HTML gợi ý endpoint |
+| `GET` | `/health` | `{ "ok": true, "service": "ma-chu-video-maker" }` |
+| `POST` | `/jobs/render` | **Full flow**: OpenAI (nếu có `idea`) **hoặc** `scenes` sẵn → ElevenLabs → Comfy → FFmpeg |
+| `POST` | `/jobs/render/from-video` | Chỉ Comfy (tuỳ chọn) + FFmpeg; **tái dùng** `meta` + `audio/*` đã có |
+
+### `POST /jobs/render`
+
+Body JSON (UTF-8). Phải có **`idea`** (gọi OpenAI) **hoặc** **`scenes`** (kịch bản gửi sẵn — **không** gọi OpenAI, tiết kiệm token khi dev Phase 2+).
+
+**A — `idea` (như cũ):**
+
+```json
+{
+  "jobId": "my-job-001",
+  "idea": "Nội dung gợi ý cho kịch bản (tiếng Việt hoặc tuỳ prompt)",
+  "bgmPath": "optional/relative/to/DATA_ROOT/music.mp3"
+}
+```
+
+**B — `scenes` sẵn** (tuỳ chọn kèm `idea` để ghi chú trong `meta`):
+
+```json
+{
+  "jobId": "phase2-preset-001",
+  "idea": "Smoke Phase 2 — preset",
+  "scenes": [
+    { "id": 1, "text": "Cảnh một thoại ngắn.", "emotion": "laugh" },
+    { "id": 2, "text": "Cảnh hai tiếp nối.", "emotion": "thinking" }
+  ]
+}
+```
+
+OpenAI (khi dùng `idea`) trả `scenes[]` cùng schema. Mood: `laugh` | `angry` | `confused` | `thinking` | `default` (driving **cảnh đầu** / Comfy), hoặc legacy: `zoom_in_fast` | `pan_left` | `camera_shake`.
+
+### `POST /jobs/render/from-video`
+
+Dùng khi đã chạy **ít nhất một lần** `/jobs/render` với cùng `jobId` (để có `scene-*.mp3` và `scene-*.alignment.json`).
+
+```json
+{
+  "jobId": "my-job-001",
+  "bgmPath": "optional/relative/to/DATA_ROOT/music.mp3",
+  "reuseRawVideo": false
+}
+```
+
+- **`reuseRawVideo`**: `false` (mặc định) — chạy lại Comfy (hoặc placeholder nếu `SKIP_COMFY=1`) với `audio/voice.mp3` hiện có, rồi cắt cảnh + concat + ASS.
+- **`reuseRawVideo`**: `true` — **không** gọi Comfy; bắt buộc đã có `comfy/raw.mp4`. Hữu ích khi chỉ thử lại hiệu ứng FFmpeg / phụ đề.
+
+Lỗi thiếu `scene-*.alignment.json` → `400` (chạy lại full `/jobs/render` một lần trên version hiện tại). Không có `meta.json` → `404`.
+
+### Ví dụ `curl`
+
+```bash
+# Full flow (OpenAI)
+curl -sS -X POST http://localhost:3000/jobs/render \
+  -H 'Content-Type: application/json' \
+  -d '{"jobId":"run-001","idea":"Ma Chủ reaction AI roast ngược — hài, hơi bối rối."}'
+
+# Full flow không OpenAI — chỉ TTS + Comfy (Phase 2 tiết kiệm token)
+curl -sS -X POST http://localhost:3000/jobs/render \
+  -H 'Content-Type: application/json' \
+  -d '{"jobId":"preset-001","scenes":[{"id":1,"text":"Câu mở đầu ngắn.","emotion":"laugh"},{"id":2,"text":"Câu kết ngắn.","emotion":"default"}]}'
+
+# Chỉ video (đủ file audio + alignment trong jobs/run-001/)
+curl -sS -X POST http://localhost:3000/jobs/render/from-video \
+  -H 'Content-Type: application/json' \
+  -d '{"jobId":"run-001"}'
+
+# Giữ nguyên raw.mp4, chỉ FFmpeg
+curl -sS -X POST http://localhost:3000/jobs/render/from-video \
+  -H 'Content-Type: application/json' \
+  -d '{"jobId":"run-001","reuseRawVideo":true}'
+```
+
+**Phản hồi thành công (200)** (cả hai endpoint):
+
+```json
+{
+  "ok": true,
+  "finalVideoPath": "shared_data/jobs/my-job-001/final/output.mp4",
+  "meta": { ... }
+}
+```
+
+Lỗi validation body → `400`. Lỗi Comfy workflow → `502`. OOM Comfy → `503`. Chi tiết trong JSON `error`.
+
+---
+
+## Scripts npm
+
+| Lệnh | Mô tả |
+|------|--------|
+| `npm run dev` | `tsx watch src/app.ts` |
+| `npm run build` | `tsc` → `dist/` |
+| `npm start` | `node dist/src/app.js` |
+| `npm run smoke:video` | Kiểm tra FFmpeg + ASS + mux (một luồng), **không** gọi API thật |
+| `npm run smoke:multiscene` | **Đa cảnh $0:** sine MP3 + alignment giả / cảnh → `SKIP_COMFY=1` → `final/output.mp4`. Env: `SMOKE_MULTISCENE_N` (12), `SMOKE_MULTISCENE_SCENE_SEC` (5). **JobId mặc định** = `smoke-multiscene-{N}x{SEC}s` (vd. `12x5s`, `3x2s`) để test ngắn không ghi đè bản khác — cố định thư mục: `SMOKE_MULTISCENE_JOB_ID=my-job` |
+| `npm run check:comfy` | `GET` Comfy (`COMFY_HTTP_URL`) |
+| `npm run verify:driving` | Kiểm tra map emotion → `assets/driving/*.mp4` (không tốn API; cùng logic Comfy) |
+| `npm run phase3:preset` | Phase 3: preset **~15s**, [`fixtures/phase3-preset-scenes.json`](fixtures/phase3-preset-scenes.json) (**không OpenAI**). Dài: `PHASE3_FIXTURE=fixtures/phase3-preset-scenes-long.json`. Log: `PIPELINE_LOG=1` |
+| `npm run install:comfy-nodes` | Clone LivePortraitKJ + VHS + pip (cần `COMFY_ROOT`) |
+
+**Smoke trả phí tối thiểu (sau khi `smoke:multiscene` xanh):** một lần `POST /jobs/render` với `SKIP_COMFY=1`, `idea` ngắn (2–3 cảnh mong đợi); kiểm tra đủ `scene-*.alignment.json`, rồi `POST /jobs/render/from-video` với `reuseRawVideo: true` để xác nhận tái dùng raw placeholder.
+
+---
+
+## Docker
+
+```bash
+docker compose up --build
+```
+
+- Service **`app`** expose `3000`, mount `./shared_data` → `/data`.
+- **`redis`** / **`n8n`**: profile `full` — `docker compose --profile full up`.
+
+ComfyUI **không** nằm trong image app; chạy host riêng và trỏ `.env` tới đó (hoặc mạng Docker nếu bạn tự thêm service Comfy).
+
+---
+
+## Workflow API Comfy
+
+File mặc định: [`workflows/workflow_api.json`](workflows/workflow_api.json). Id node khớp [`src/config/comfy-workflow.ts`](src/config/comfy-workflow.ts). Đổi graph: Export API từ Comfy rồi cập nhật hai file này.
+
+---
+
+## Tài liệu thêm
+
+| File | Nội dung |
+|------|----------|
+| [docs/pipeline.md](docs/pipeline.md) | **Chi tiết:** bảng bước pipeline, `emotion` (Comfy hook vs FFmpeg từng cảnh), map `assets/driving/`, alignment, `/from-video`, `verify:driving`, E2E |
+| [docs/dev-phases.md](docs/dev-phases.md) | Phase dev + Definition of done + kế hoạch test T0–T4 (ưu tiên $0 với `smoke:multiscene`) |
+| [docs/README.md](docs/README.md) | Mục lục thư mục `docs/` |
+| [docs/comfy-macos.md](docs/comfy-macos.md) | ComfyUI + LivePortrait + macOS + symlink / `COMFY_*` + lỗi thường gặp |
+| [.env.example](.env.example) | Mẫu biến môi trường có comment |
+
+---
+
+## License / ghi chú sản phẩm
+
+- ElevenLabs, OpenAI: tuỳ điều khoản tài khoản.
+- LivePortrait / custom nodes: xem license từng repo (InsightFace có bản **non-commercial** nếu dùng nhánh đó; repo hiện dùng **FaceAlignment / blazeface** theo [`docs/comfy-macos.md`](docs/comfy-macos.md)).
