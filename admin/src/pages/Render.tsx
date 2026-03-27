@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
-import { App, Button, Card, Form, Input, Select } from 'antd';
-import { PageContainer } from '@ant-design/pro-components';
+import { App, Button, Divider, Form, Input, Select, Typography } from 'antd';
 import { adminFetch, PIPELINE_FETCH_INIT } from '../lib/api';
 import { HttpResponseJsonView } from '../components/AdminJsonView';
+import { PageSectionCard } from '../components/PageSectionCard';
+import { StandardAdminPage } from '../components/StandardAdminPage';
 
 /** Khớp preset mặc định repo: DATA_ROOT/profiles/cinematic_mystery.json */
 const DEFAULT_RENDER_PROFILE_ID = 'cinematic_mystery';
@@ -63,8 +64,18 @@ export default function Render() {
   };
 
   return (
-    <PageContainer title="Render mới (POST /jobs/render)">
-      <Card>
+    <StandardAdminPage
+      title="Render mới"
+      description={
+        <>
+          <Typography.Text type="secondary">
+            POST <Typography.Text code>/jobs/render</Typography.Text> — tạo job / chạy pipeline từ idea
+            hoặc resume.
+          </Typography.Text>
+        </>
+      }
+    >
+      <PageSectionCard title="Biểu mẫu">
         <Form
           layout="vertical"
           initialValues={{
@@ -121,10 +132,18 @@ export default function Render() {
             Chạy render
           </Button>
         </Form>
-      </Card>
+      </PageSectionCard>
       {responseText ? (
-        <HttpResponseJsonView text={responseText} data-testid="render-response-pre" maxHeight="50vh" />
+        <>
+          <Divider style={{ margin: '16px 0' }} />
+          <PageSectionCard title="Phản hồi gần nhất">
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+              Dòng đầu là HTTP status; phần dưới là body.
+            </Typography.Paragraph>
+            <HttpResponseJsonView text={responseText} data-testid="render-response-pre" maxHeight="50vh" />
+          </PageSectionCard>
+        </>
       ) : null}
-    </PageContainer>
+    </StandardAdminPage>
   );
 }

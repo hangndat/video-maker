@@ -5,10 +5,9 @@ import { Button, Space, Table, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { ReloadOutlined } from '@ant-design/icons';
 import { adminFetch } from '../lib/api';
-import { AppPageHeader } from '../components/AppPageHeader';
-import { PageShell } from '../components/PageShell';
 import { PageTableCard } from '../components/PageTableCard';
 import { PageToolbar } from '../components/PageToolbar';
+import { StandardAdminPage } from '../components/StandardAdminPage';
 
 type JobRow = {
   jobId: string;
@@ -88,28 +87,28 @@ export default function Jobs() {
   ];
 
   return (
-    <PageShell>
-      <AppPageHeader
-        breadcrumb={<Link to="/">Admin</Link>}
-        title="Jobs"
-        description="Thư mục DATA_ROOT/jobs + jobs-manifest.json. Bấm jobId để mở chi tiết (layout giống content-company)."
-      />
-      <PageToolbar spread>
-        <Typography.Text type="secondary" style={{ margin: 0 }}>
-          {rows.length} job trong danh sách
-        </Typography.Text>
-        <Space wrap style={{ flexShrink: 0 }}>
-          <Button
-            type="primary"
-            icon={<ReloadOutlined />}
-            onClick={() => void load()}
-            loading={loading}
-            data-testid="btn-jobs-refresh"
-          >
-            Làm mới
-          </Button>
-        </Space>
-      </PageToolbar>
+    <StandardAdminPage
+      title="Jobs"
+      description="Thư mục DATA_ROOT/jobs + jobs-manifest.json. Bấm jobId để mở chi tiết (layout giống content-company)."
+      toolbar={
+        <PageToolbar spread>
+          <Typography.Text type="secondary" style={{ margin: 0 }}>
+            {rows.length} job trong danh sách
+          </Typography.Text>
+          <Space wrap style={{ flexShrink: 0 }}>
+            <Button
+              type="primary"
+              icon={<ReloadOutlined />}
+              onClick={() => void load()}
+              loading={loading}
+              data-testid="btn-jobs-refresh"
+            >
+              Làm mới
+            </Button>
+          </Space>
+        </PageToolbar>
+      }
+    >
       <PageTableCard>
         <div data-testid="jobs-table">
           <Table<JobRow>
@@ -127,6 +126,6 @@ export default function Jobs() {
           />
         </div>
       </PageTableCard>
-    </PageShell>
+    </StandardAdminPage>
   );
 }

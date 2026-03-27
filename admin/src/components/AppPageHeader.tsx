@@ -4,14 +4,13 @@ import type { ReactNode } from 'react';
 const { Title, Text } = Typography;
 
 type AppPageHeaderProps = {
-  breadcrumb?: ReactNode;
   title: string;
   description?: ReactNode;
   extra?: ReactNode;
 };
 
-/** Header kiểu content-company: breadcrumb + title + mô tả + extra. */
-export function AppPageHeader({ breadcrumb, title, description, extra }: AppPageHeaderProps) {
+/** Header: tiêu đề + mô tả + extra. */
+export function AppPageHeader({ title, description, extra }: AppPageHeaderProps) {
   const { token } = theme.useToken();
 
   return (
@@ -21,23 +20,21 @@ export function AppPageHeader({ breadcrumb, title, description, extra }: AppPage
           display: 'flex',
           justifyContent: 'space-between',
           alignItems: 'flex-start',
-          gap: token.marginMD,
+          gap: token.marginSM,
           flexWrap: 'wrap',
+          rowGap: token.marginXS,
         }}
       >
-        <div style={{ flex: '1 1 min(100%, 320px)', minWidth: 0 }}>
-          {breadcrumb ? (
-            <Text type="secondary" style={{ display: 'block', fontSize: 12, marginBottom: token.marginXS }}>
-              {breadcrumb}
-            </Text>
-          ) : null}
+        <div style={{ flex: '1 1 min(100%, 280px)', minWidth: 0 }}>
           <Title
-            level={breadcrumb ? 2 : 3}
+            level={3}
             style={{
               margin: 0,
-              marginBottom: description ? token.marginXS : 0,
+              marginBottom: description ? 4 : 0,
               fontWeight: 600,
               letterSpacing: '-0.02em',
+              fontSize: '1.25rem',
+              lineHeight: 1.35,
             }}
           >
             {title}
@@ -45,13 +42,13 @@ export function AppPageHeader({ breadcrumb, title, description, extra }: AppPage
           {description ? (
             <Text
               type="secondary"
-              style={{ display: 'block', maxWidth: 'min(52rem, 100%)', lineHeight: 1.65, marginTop: 4 }}
+              style={{ display: 'block', maxWidth: 'min(52rem, 100%)', lineHeight: 1.5, marginTop: 2, fontSize: 13 }}
             >
               {description}
             </Text>
           ) : null}
         </div>
-        {extra ? <div style={{ flexShrink: 0, paddingTop: 2 }}>{extra}</div> : null}
+        {extra ? <div style={{ flexShrink: 0 }}>{extra}</div> : null}
       </div>
     </header>
   );

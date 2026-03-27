@@ -1,3 +1,8 @@
+/* Khớp @ant-design/pro-layout GlobalHeader: token.layout.header.heightLayoutHeader ?? 56 */
+:root {
+  --cc-pro-layout-header-height: 56px;
+}
+
 body {
   margin: 0;
   font-family:
@@ -9,30 +14,41 @@ body {
   min-height: 100vh;
 }
 
-/* --- Layout kiểu content-company: khối nội dung trắng + section stack --- */
+/* --- Khối nội dung chính: sát header + sider (PageContainer padding đã về 0). --- */
 .cc-main-content-surface {
   background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.04),
-    0 4px 24px rgba(0, 0, 0, 0.04);
+  border: 0;
+  border-bottom: 1px solid #ececec;
+  border-radius: 0;
+  box-shadow: none;
   padding: clamp(18px, 2.2vw, 26px) clamp(18px, 2.8vw, 32px) clamp(22px, 2.8vw, 32px);
   box-sizing: border-box;
-  min-height: calc(100vh - 72px);
+  min-height: calc(100vh - 56px);
 }
 
 .cc-page-shell {
   display: flex;
   flex-direction: column;
   width: 100%;
-  gap: clamp(18px, 2.2vw, 26px);
+  gap: clamp(12px, 1.8vw, 20px);
+}
+
+/* Leading + tiêu đề + toolbar: sticky ngay dưới header app (fixed), không trùng viewport top. */
+.cc-page-heading-sticky {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(8px, 1.2vw, 14px);
+  position: sticky;
+  top: calc(var(--cc-pro-layout-header-height) + env(safe-area-inset-top, 0px));
+  z-index: 15;
+  background: #fff;
+  box-shadow: 0 6px 16px -8px rgba(0, 0, 0, 0.08);
 }
 
 .cc-page-header {
   margin: 0;
-  padding-bottom: clamp(14px, 2vw, 20px);
-  margin-bottom: 2px;
+  padding-bottom: clamp(8px, 1.2vw, 12px);
+  margin-bottom: 0;
   border-bottom: 1px solid #f0f0f0;
 }
 
@@ -61,8 +77,8 @@ body {
 
 @media (max-width: 768px) {
   .cc-main-content-surface {
-    border-radius: 8px;
+    border-radius: 0;
     padding: 12px 10px 16px;
-    min-height: calc(100dvh - 96px);
+    min-height: calc(100dvh - 56px);
   }
 }

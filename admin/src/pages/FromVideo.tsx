@@ -1,12 +1,12 @@
 import { useState } from 'react';
-import { App, Button, Card, Form, Input, Switch, Space, theme } from 'antd';
-import { PageContainer } from '@ant-design/pro-components';
+import { App, Button, Divider, Form, Input, Switch, Space, Typography } from 'antd';
 import { adminFetch, PIPELINE_FETCH_INIT } from '../lib/api';
 import { HttpResponseJsonView } from '../components/AdminJsonView';
+import { PageSectionCard } from '../components/PageSectionCard';
+import { StandardAdminPage } from '../components/StandardAdminPage';
 
 export default function FromVideo() {
   const { message } = App.useApp();
-  const { token } = theme.useToken();
   const [responseText, setResponseText] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [form] = Form.useForm();
@@ -77,9 +77,19 @@ export default function FromVideo() {
   };
 
   return (
-    <PageContainer title="From video (POST /jobs/render/from-video)">
-      <Card>
-        <Space style={{ marginBottom: token.marginMD }} wrap>
+    <StandardAdminPage
+      title="From video"
+      description={
+        <>
+          <Typography.Text type="secondary">
+            POST <Typography.Text code>/jobs/render/from-video</Typography.Text> — ingest / mux theo job có
+            sẵn.
+          </Typography.Text>
+        </>
+      }
+    >
+      <PageSectionCard title="Biểu mẫu">
+        <Space style={{ marginBottom: 16 }} wrap>
           <Button data-testid="btn-preset-assemble-only" onClick={presetAssembleOnly}>
             Mẫu assembleOnly
           </Button>
@@ -123,14 +133,22 @@ export default function FromVideo() {
             Chạy from-video
           </Button>
         </Form>
-      </Card>
+      </PageSectionCard>
       {responseText ? (
-        <HttpResponseJsonView
-          text={responseText}
-          data-testid="from-video-response-pre"
-          maxHeight="50vh"
-        />
+        <>
+          <Divider style={{ margin: '16px 0' }} />
+          <PageSectionCard title="Phản hồi gần nhất">
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 8 }}>
+              Dòng đầu là HTTP status; phần dưới là body.
+            </Typography.Paragraph>
+            <HttpResponseJsonView
+              text={responseText}
+              data-testid="from-video-response-pre"
+              maxHeight="50vh"
+            />
+          </PageSectionCard>
+        </>
       ) : null}
-    </PageContainer>
+    </StandardAdminPage>
   );
 }

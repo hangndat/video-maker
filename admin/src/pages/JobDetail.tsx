@@ -10,6 +10,7 @@ import {
 import { adminFetch, PIPELINE_FETCH_INIT } from '../lib/api';
 import { PageBackNav } from '../components/PageBackNav';
 import { PageShell } from '../components/PageShell';
+import { StandardAdminPage } from '../components/StandardAdminPage';
 import { buildAgentStages, type AgentStage } from '../pipeline-agents';
 import { JobDetailFilesTab } from './job-detail/JobDetailFilesTab';
 import { JobDetailOverviewTab } from './job-detail/JobDetailOverviewTab';
@@ -316,15 +317,22 @@ export default function JobDetail() {
     },
   ];
 
+  const jobDescription = jobHeadline?.trim()
+    ? jobHeadline.trim()
+    : 'Artifact, pipeline, tune và file trên disk (DATA_ROOT/jobs).';
+
   return (
-    <PageShell>
-      <PageBackNav label="Quay lại danh sách job" onBack={() => navigate('/jobs')} />
+    <StandardAdminPage
+      leading={<PageBackNav label="Quay lại danh sách job" onBack={() => navigate('/jobs')} />}
+      title={jobId}
+      description={jobDescription}
+    >
       <Tabs
         activeKey={mainTab}
         onChange={setMainTabInUrl}
         items={tabItems}
         destroyInactiveTabPane={false}
       />
-    </PageShell>
+    </StandardAdminPage>
   );
 }

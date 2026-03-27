@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Button, Card, Space, Typography } from 'antd';
-import { PageContainer } from '@ant-design/pro-components';
+import { Button, Space, Typography } from 'antd';
 import { adminFetch } from '../lib/api';
 import { AdminJsonView } from '../components/AdminJsonView';
+import { PageSectionCard } from '../components/PageSectionCard';
+import { StandardAdminPage } from '../components/StandardAdminPage';
 
 const { Paragraph, Text } = Typography;
 
@@ -23,9 +24,12 @@ export default function HealthTest() {
   };
 
   return (
-    <PageContainer title="Kiểm thử & Health">
+    <StandardAdminPage
+      title="Kiểm thử & Health"
+      description="Gọi health công khai và context API admin (cần token nếu server bật)."
+    >
       <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-        <Card title="Service">
+        <PageSectionCard title="Service">
           <Space wrap>
             <Button type="primary" onClick={runHealth} data-testid="btn-health-check">
               GET /health
@@ -34,7 +38,7 @@ export default function HealthTest() {
               GET /admin/api/context
             </Button>
           </Space>
-          {(healthData != null || contextText) ? (
+          {healthData != null || contextText ? (
             <Space direction="vertical" size="middle" style={{ width: '100%', marginTop: 16 }}>
               {healthData != null ? (
                 <AdminJsonView
@@ -54,8 +58,8 @@ export default function HealthTest() {
               ) : null}
             </Space>
           ) : null}
-        </Card>
-        <Card title="Tài liệu & test gợi ý">
+        </PageSectionCard>
+        <PageSectionCard title="Tài liệu & test gợi ý">
           <Paragraph>
             <Text code>docs/pipeline.md</Text> — luồng preset, <Text code>from-video</Text>,{' '}
             <Text code>assembleOnly</Text>.
@@ -64,8 +68,8 @@ export default function HealthTest() {
             Seed job E2E: <Text code>src/e2e/seed-minimal-job.ts</Text> — chạy{' '}
             <Text code>npm run test:e2e</Text> (cần ffmpeg).
           </Paragraph>
-        </Card>
+        </PageSectionCard>
       </Space>
-    </PageContainer>
+    </StandardAdminPage>
   );
 }

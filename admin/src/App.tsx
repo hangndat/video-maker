@@ -55,6 +55,12 @@ function LayoutContent() {
       layout="mix"
       fixedHeader
       fixSiderbar
+      token={{
+        pageContainer: {
+          paddingInlinePageContainerContent: 0,
+          paddingBlockPageContainerContent: 0,
+        },
+      }}
       location={{ pathname: location.pathname }}
       route={route}
       menuItemRender={(item, dom) => {

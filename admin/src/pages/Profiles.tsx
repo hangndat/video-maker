@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Card, Tag, theme } from 'antd';
-import { PageContainer } from '@ant-design/pro-components';
+import { Tag, theme } from 'antd';
 import { adminFetch } from '../lib/api';
+import { PageSectionCard } from '../components/PageSectionCard';
+import { StandardAdminPage } from '../components/StandardAdminPage';
 
 export default function Profiles() {
   const { token } = theme.useToken();
@@ -18,8 +19,11 @@ export default function Profiles() {
   }, [load]);
 
   return (
-    <PageContainer title="Profiles (DATA_ROOT/profiles)">
-      <Card>
+    <StandardAdminPage
+      title="Profiles"
+      description="Danh sách file preset trong DATA_ROOT/profiles (*.json)."
+    >
+      <PageSectionCard>
         <div data-testid="profiles-list" style={{ display: 'flex', flexWrap: 'wrap', gap: token.marginXS }}>
           {profiles.map((p) => (
             <Tag key={p} data-profile-id={p}>
@@ -27,7 +31,7 @@ export default function Profiles() {
             </Tag>
           ))}
         </div>
-      </Card>
-    </PageContainer>
+      </PageSectionCard>
+    </StandardAdminPage>
   );
 }
